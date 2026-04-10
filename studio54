@@ -1,0 +1,429 @@
+#!/usr/bin/env bash
+###############################################################################
+# studio54 — Management CLI for Studio54
+# Music & Audiobook Management System
+#
+# Usage: ./studio54 <command> [options]
+###############################################################################
+
+set -Eeuo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB_DIR="$SCRIPT_DIR/scripts/lib"
+
+# shellcheck source=scripts/lib/logging.sh
+source "$LIB_DIR/logging.sh"
+# shellcheck source=scripts/lib/docker.sh
+source "$LIB_DIR/docker.sh"
+# shellcheck source=scripts/lib/validation.sh
+source "$LIB_DIR/validation.sh"
+
+VERSION="1.0.0"
+ENV_FILE="$SCRIPT_DIR/.env"
+COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
+
+# Override paths for library functions
+export STUDIO54_COMPOSE_FILE="$COMPOSE_FILE"
+export STUDIO54_ENV_FILE="$ENV_FILE"
+
+cd "$SCRIPT_DIR"
+
+###############################################################################
+# Helpers
+###############################################################################
+
+usage() {
+    print_banner
+    cat <<EOF
+${BOLD}Usage:${NC} ./studio54 <command> [options]
+
+${BOLD}Setup:${NC}
+  check                   Check prerequisites (Docker, ports, disk space)
+  setup                   Interactive first-run setup (create .env, directories)
+  install                 Same as setup
+
+${BOLD}Service Control:${NC}
+  start [service]         Start all services (or a specific one)
+  stop [service]          Stop all services (or a specific one)
+  restart [service]       Restart all services (or a specific one)
+  status                  Show service status and access URLs
+  logs [service]          Follow logs (all services or specific one)
+
+${BOLD}Deployment:${NC}
+  deploy <service>        Rebuild and redeploy a service (no-cache)
+
+${BOLD}Watchtower (auto-updates):${NC}
+  watchtower enable       Start Watchtower auto-update service
+  watchtower disable      Stop Watchtower auto-update service
+  watchtower status       Show auto-update status
+
+${BOLD}Maintenance:${NC}
+  backup [service|all]    Backup service data
+  restore <file>          Restore from backup archive
+  update [service]        Pull latest images and restart
+
+${BOLD}MusicBrainz Local DB:${NC}
+  musicbrainzdb setup <token>   Set up local MusicBrainz mirror
+  musicbrainzdb status          Show mirror status
+  musicbrainzdb logs [lines]    View DB container logs
+
+${BOLD}System:${NC}
+  version                 Show version
+  help                    Show this help
+
+${BOLD}Examples:${NC}
+  ./studio54 setup
+  ./studio54 start
+  ./studio54 logs studio54-service
+  ./studio54 deploy studio54-service
+  ./studio54 backup all
+
+EOF
+}
+
+###############################################################################
+# Commands
+###############################################################################
+
+cmd_check() {
+    log_header "Studio54 Prerequisite Check"
+    check_prerequisites
+    if [[ -f "$ENV_FILE" ]]; then
+        check_env "$ENV_FILE"
+        check_data_dirs "$ENV_FILE"
+    else
+        log_warn ".env not found — run './studio54 setup' to create it"
+    fi
+    check_disk_space / 10
+
+    # Port availability
+    log_step "Checking ports..."
+    # shellcheck disable=SC1090
+    [[ -f "$ENV_FILE" ]] && source "$ENV_FILE" 2>/dev/null || true
+    local ports=(
+        "${STUDIO54_WEB_PORT:-8009}:Studio54 Web"
+        "${STUDIO54_SERVICE_PORT:-8010}:Studio54 API"
+        "${STUDIO54_DB_PORT:-5434}:PostgreSQL"
+        "${STUDIO54_REDIS_PORT:-6381}:Redis"
+        "${STUDIO54_DOZZLE_PORT:-9998}:Dozzle"
+    )
+    for entry in "${ports[@]}"; do
+        local port="${entry%%:*}"
+        local label="${entry##*:}"
+        if ss -tlnp "sport = :${port}" 2>/dev/null | grep -q LISTEN; then
+            log_warn "Port ${port} is in use (${label})"
+        else
+            log_success "Port ${port} available (${label})"
+        fi
+    done
+}
+
+cmd_setup() {
+    log_header "Studio54 Setup"
+    check_docker || { log_error "Docker is required. Install it first."; exit 1; }
+
+    # .env
+    if [[ -f "$ENV_FILE" ]]; then
+        log_info ".env already exists"
+    else
+        log_step "Creating .env from template..."
+        cp "$SCRIPT_DIR/.env.example" "$ENV_FILE"
+
+        local db_password encryption_key
+        db_password=$(openssl rand -hex 32)
+        encryption_key=$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" 2>/dev/null \
+            || openssl rand -base64 32)
+        sed -i "s|STUDIO54_DB_PASSWORD=.*|STUDIO54_DB_PASSWORD=${db_password}|" "$ENV_FILE"
+        sed -i "s|STUDIO54_ENCRYPTION_KEY=.*|STUDIO54_ENCRYPTION_KEY=${encryption_key}|" "$ENV_FILE"
+        log_success ".env created with generated secrets"
+        log_warn "Edit ${ENV_FILE} to set MUSIC_LIBRARY_PATH, AUDIOBOOKS_PATH, and API keys"
+    fi
+
+    # shellcheck disable=SC1090
+    source "$ENV_FILE" 2>/dev/null || true
+    local data_dir="${STUDIO54_DATA_DIR:-/docker/studio54}"
+
+    # Data directories
+    log_step "Creating data directories..."
+    for dir in "$data_dir/postgres" "$data_dir/redis" "$data_dir/cover-art"; do
+        if [[ ! -d "$dir" ]]; then
+            sudo mkdir -p "$dir" && sudo chown -R "$USER:$USER" "$dir" 2>/dev/null || \
+                mkdir -p "$dir"
+            log_success "Created: ${dir}"
+        else
+            log_info "Already exists: ${dir}"
+        fi
+    done
+
+    log_success "Setup complete. Run './studio54 start' to launch."
+}
+
+cmd_start() {
+    local service="${1:-}"
+    if [[ -n "$service" ]]; then
+        log_header "Starting ${service}"
+        dc up -d "$service"
+    else
+        log_header "Starting Studio54"
+        dc up -d
+    fi
+    sleep 2
+    docker ps --filter "name=studio54" --format "table {{.Names}}\t{{.Status}}"
+}
+
+cmd_stop() {
+    local service="${1:-}"
+    if [[ -n "$service" ]]; then
+        log_header "Stopping ${service}"
+        dc stop "$service"
+    else
+        log_header "Stopping Studio54"
+        dc stop
+    fi
+}
+
+cmd_restart() {
+    local service="${1:-}"
+    if [[ -n "$service" ]]; then
+        log_header "Restarting ${service}"
+        container_remove "$service"
+        dc up -d "$service"
+    else
+        log_header "Restarting Studio54"
+        dc restart
+    fi
+}
+
+cmd_status() {
+    log_header "Studio54 Status"
+
+    # shellcheck disable=SC1090
+    [[ -f "$ENV_FILE" ]] && source "$ENV_FILE" 2>/dev/null || true
+
+    local web_port="${STUDIO54_WEB_PORT:-8009}"
+    local svc_port="${STUDIO54_SERVICE_PORT:-8010}"
+    local dozzle_port="${STUDIO54_DOZZLE_PORT:-9998}"
+
+    # Get server IP
+    local ip
+    ip=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "localhost")
+
+    echo ""
+    docker ps --filter "name=studio54" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+    echo ""
+
+    log_info "Access URLs:"
+    echo "  Web UI   : http://localhost:${web_port}   (http://${ip}:${web_port})"
+    echo "  API      : http://localhost:${svc_port}  (http://${ip}:${svc_port})"
+    echo "  API Docs : http://localhost:${svc_port}/docs"
+    echo "  Dozzle   : http://localhost:${dozzle_port}  (http://${ip}:${dozzle_port})"
+    echo ""
+
+    # Resource utilization
+    log_info "Resource utilization:"
+    docker stats --no-stream --format "  {{.Name}}: CPU {{.CPUPerc}}  MEM {{.MemUsage}}" \
+        $(docker ps --filter "name=studio54" --format "{{.Names}}" | tr '\n' ' ') 2>/dev/null || true
+    echo ""
+
+    local cpu mem disk gpu_info
+    cpu=$(top -bn1 | grep "Cpu(s)" | awk '{print $2}' | cut -d'%' -f1 || echo "?")
+    mem=$(free -h | awk '/^Mem:/ {print $3 "/" $2}')
+    disk=$(df -h / | awk 'NR==2 {print $3 "/" $2 " (" $5 " used)"}')
+    log_info "System: CPU ${cpu}%  MEM ${mem}  DISK ${disk}"
+
+    if command -v nvidia-smi &>/dev/null; then
+        gpu_info=$(nvidia-smi --query-gpu=name,utilization.gpu,memory.used,memory.total \
+            --format=csv,noheader,nounits 2>/dev/null | head -1 || echo "unavailable")
+        log_info "GPU: ${gpu_info}"
+    fi
+}
+
+cmd_logs() {
+    local service="${1:-}"
+    if [[ -n "$service" ]]; then
+        dc logs -f --tail=200 "$service"
+    else
+        dc logs -f --tail=200
+    fi
+}
+
+cmd_deploy() {
+    local service="${1:-}"
+    if [[ -z "$service" ]]; then
+        log_error "Usage: ./studio54 deploy <service>"
+        exit 1
+    fi
+    bash "$SCRIPT_DIR/scripts/deploy.sh" "$service"
+}
+
+cmd_watchtower() {
+    local action="${1:-status}"
+    # shellcheck disable=SC1090
+    [[ -f "$ENV_FILE" ]] && source "$ENV_FILE" 2>/dev/null || true
+
+    case "$action" in
+        enable)
+            log_info "Starting Watchtower..."
+            dc --profile watchtower up -d studio54-watchtower
+            log_success "Watchtower started (checks every ${WATCHTOWER_INTERVAL:-86400}s)"
+            ;;
+        disable)
+            log_info "Stopping Watchtower..."
+            dc stop studio54-watchtower 2>/dev/null || true
+            dc rm -f studio54-watchtower 2>/dev/null || true
+            log_success "Watchtower stopped"
+            ;;
+        status)
+            if container_running "studio54-watchtower"; then
+                log_success "Watchtower is running"
+            else
+                log_info "Watchtower is not running"
+            fi
+            echo ""
+            # shellcheck disable=SC1090
+            [[ -f "$ENV_FILE" ]] && source "$ENV_FILE" 2>/dev/null || true
+            echo "  Per-service update flags (from .env):"
+            for svc in DB REDIS SERVICE WORKER BEAT WEB DOZZLE; do
+                local var="WATCHTOWER_STUDIO54_${svc}"
+                echo "    ${svc}: ${!var:-not set}"
+            done
+            ;;
+        *) log_error "Usage: ./studio54 watchtower enable|disable|status"; exit 1 ;;
+    esac
+}
+
+cmd_update() {
+    local service="${1:-}"
+    if [[ -n "$service" ]]; then
+        log_header "Updating ${service}"
+        dc pull "$service" 2>/dev/null || true
+        cmd_deploy "$service"
+    else
+        log_header "Updating all services"
+        dc pull 2>/dev/null || true
+        dc up -d
+    fi
+}
+
+cmd_backup() {
+    local target="${1:-all}"
+    # shellcheck disable=SC1090
+    [[ -f "$ENV_FILE" ]] && source "$ENV_FILE" 2>/dev/null || true
+
+    local data_dir="${STUDIO54_DATA_DIR:-/docker/studio54}"
+    local backup_dir="$SCRIPT_DIR/data/backups"
+    local timestamp
+    timestamp=$(date +%Y%m%d_%H%M%S)
+
+    mkdir -p "$backup_dir"
+
+    backup_service() {
+        local svc="$1"
+        local src="$2"
+        local archive="$backup_dir/${svc}_${timestamp}.tar.gz"
+        log_info "Backing up ${svc} -> ${archive}"
+        tar czf "$archive" -C "$(dirname "$src")" "$(basename "$src")"
+        log_success "Backup complete: ${archive} ($(du -sh "$archive" | cut -f1))"
+    }
+
+    case "$target" in
+        all|db|postgres)
+            [[ "$target" == "all" || "$target" == "db" || "$target" == "postgres" ]] && \
+                backup_service "studio54-db" "$data_dir/postgres" ;;
+    esac
+
+    case "$target" in
+        all)
+            backup_service "studio54-redis" "$data_dir/redis"
+            backup_service "studio54-cover-art" "$data_dir/cover-art"
+            ;;
+    esac
+
+    log_success "Backups stored in: ${backup_dir}"
+}
+
+cmd_restore() {
+    local archive="${1:-}"
+    if [[ -z "$archive" || ! -f "$archive" ]]; then
+        log_error "Usage: ./studio54 restore <backup-file.tar.gz>"
+        exit 1
+    fi
+    log_warn "This will overwrite existing data. Continue? [y/N]"
+    read -r confirm
+    [[ "${confirm,,}" != "y" ]] && { log_info "Aborted."; exit 0; }
+
+    log_info "Stopping services before restore..."
+    dc stop studio54-service studio54-worker studio54-beat 2>/dev/null || true
+
+    log_info "Extracting ${archive}..."
+    tar xzf "$archive" -C /
+    log_success "Restore complete"
+
+    log_info "Restarting services..."
+    dc up -d
+}
+
+cmd_musicbrainzdb() {
+    local action="${1:-status}"
+    shift || true
+
+    case "$action" in
+        setup)
+            local token="${1:-}"
+            if [[ -z "$token" ]]; then
+                log_error "Usage: ./studio54 musicbrainzdb setup <replication-token>"
+                log_info "Get a token at: https://metabrainz.org/supporters/account-type"
+                exit 1
+            fi
+            log_warn "MusicBrainz local DB setup requires ~70GB of disk space and 1-3 hours."
+            log_warn "See docs/ for full setup instructions."
+            log_info "Token accepted. Manual setup steps required — see CLAUDE.md for details."
+            ;;
+        status)
+            log_header "MusicBrainz Local DB Status"
+            # shellcheck disable=SC1090
+            [[ -f "$ENV_FILE" ]] && source "$ENV_FILE" 2>/dev/null || true
+            echo "  MUSICBRAINZ_LOCAL_DB_ENABLED : ${MUSICBRAINZ_LOCAL_DB_ENABLED:-false}"
+            echo "  MUSICBRAINZ_LOCAL_DB_URL     : ${MUSICBRAINZ_LOCAL_DB_URL:-(not set)}"
+            ;;
+        logs)
+            local lines="${1:-100}"
+            docker logs --tail="$lines" -f musicbrainz-docker-db 2>/dev/null \
+                || log_warn "MusicBrainz DB container not found"
+            ;;
+        *)
+            log_error "Usage: ./studio54 musicbrainzdb setup|status|logs"
+            exit 1
+            ;;
+    esac
+}
+
+###############################################################################
+# Entrypoint
+###############################################################################
+
+COMMAND="${1:-help}"
+shift || true
+
+case "$COMMAND" in
+    check)              cmd_check "$@" ;;
+    setup|install)      cmd_setup "$@" ;;
+    start)              cmd_start "$@" ;;
+    stop)               cmd_stop "$@" ;;
+    restart)            cmd_restart "$@" ;;
+    status)             cmd_status "$@" ;;
+    logs)               cmd_logs "$@" ;;
+    deploy)             cmd_deploy "$@" ;;
+    watchtower)         cmd_watchtower "$@" ;;
+    update)             cmd_update "$@" ;;
+    backup)             cmd_backup "$@" ;;
+    restore)            cmd_restore "$@" ;;
+    musicbrainzdb)      cmd_musicbrainzdb "$@" ;;
+    version)            echo "Studio54 v${VERSION}" ;;
+    help|--help|-h)     usage ;;
+    *)
+        log_error "Unknown command: ${COMMAND}"
+        echo "Run './studio54 help' for usage."
+        exit 1
+        ;;
+esac

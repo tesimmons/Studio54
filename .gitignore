@@ -1,0 +1,53 @@
+# Environment / secrets
+.env
+.secrets
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+.eggs/
+dist/
+build/
+*.egg
+.venv/
+venv/
+env/
+.pytest_cache/
+.coverage
+htmlcov/
+*.log
+
+# Node / Frontend
+node_modules/
+studio54-web/dist/
+studio54-web/.env.local
+studio54-web/.env.development.local
+studio54-web/.env.test.local
+studio54-web/.env.production.local
+
+# Docker build artifacts
+*.dockerignore
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+Thumbs.db
+
+# Alembic
+studio54-service/alembic/versions/__pycache__/
+
+# Backups
+data/backups/
+*.tar.gz
+*.bak
+
+# Temporary files
+*.tmp
+*.temp

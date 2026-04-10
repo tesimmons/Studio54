@@ -1,0 +1,288 @@
+###############################################################################
+# Studio54 — Standalone Docker Compose
+# Music & Audiobook Management System
+###############################################################################
+
+networks:
+  studio54_network:
+    name: studio54_network
+    driver: bridge
+
+volumes:
+  studio54-job-logs:
+    driver: local
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # Database (PostgreSQL)
+  # ---------------------------------------------------------------------------
+  studio54-db:
+    image: postgres:15-alpine
+    container_name: studio54-db
+    restart: unless-stopped
+    ports:
+      - "${STUDIO54_DB_PORT:-5434}:5432"
+    environment:
+      - POSTGRES_DB=${STUDIO54_DB_NAME:-studio54_db}
+      - POSTGRES_USER=${STUDIO54_DB_USER:-studio54}
+      - POSTGRES_PASSWORD=${STUDIO54_DB_PASSWORD}
+      - TZ=${TZ:-America/New_York}
+    volumes:
+      - ${STUDIO54_DATA_DIR:-/docker/studio54}/postgres:/var/lib/postgresql/data
+    networks:
+      - studio54_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${STUDIO54_DB_USER:-studio54} -d ${STUDIO54_DB_NAME:-studio54_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    labels:
+      com.centurylinklabs.watchtower.enable: "${WATCHTOWER_STUDIO54_DB:-false}"
+
+  # ---------------------------------------------------------------------------
+  # Cache / Message Broker (Redis)
+  # ---------------------------------------------------------------------------
+  studio54-redis:
+    image: redis:7-alpine
+    container_name: studio54-redis
+    restart: unless-stopped
+    ports:
+      - "${STUDIO54_REDIS_PORT:-6381}:6379"
+    environment:
+      - TZ=${TZ:-America/New_York}
+    volumes:
+      - ${STUDIO54_DATA_DIR:-/docker/studio54}/redis:/data
+    networks:
+      - studio54_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    command: redis-server --appendonly yes
+    labels:
+      com.centurylinklabs.watchtower.enable: "${WATCHTOWER_STUDIO54_REDIS:-true}"
+
+  # ---------------------------------------------------------------------------
+  # API Service (FastAPI + Celery)
+  # ---------------------------------------------------------------------------
+  studio54-service:
+    build:
+      context: ./studio54-service
+      dockerfile: Dockerfile
+    image: studio54/service:latest
+    container_name: studio54-service
+    restart: unless-stopped
+    ports:
+      - "${STUDIO54_SERVICE_PORT:-8010}:8010"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - DATABASE_URL=postgresql://${STUDIO54_DB_USER:-studio54}:${STUDIO54_DB_PASSWORD}@studio54-db:5432/${STUDIO54_DB_NAME:-studio54_db}
+      - REDIS_URL=redis://studio54-redis:6379/0
+      - CELERY_BROKER_URL=redis://studio54-redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://studio54-redis:6379/0
+      - STUDIO54_ENCRYPTION_KEY=${STUDIO54_ENCRYPTION_KEY}
+      - SABNZBD_HOST=${SABNZBD_HOST:-}
+      - SABNZBD_PORT=${SABNZBD_PORT:-8080}
+      - SABNZBD_API_KEY=${SABNZBD_API_KEY:-}
+      - SABNZBD_DOWNLOAD_DIR=${SABNZBD_DOWNLOAD_DIR:-/downloads/music}
+      - MUSIC_LIBRARY_PATH=${MUSIC_LIBRARY_PATH:-/music}
+      - AUDIOBOOKS_PATH=${AUDIOBOOKS_PATH:-/audiobooks}
+      - OLLAMA_URL=${OLLAMA_URL:-http://localhost:11434}
+      - OLLAMA_EMBEDDING_MODEL=${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.1:8b}
+      - FANART_API_KEY=${FANART_API_KEY:-}
+      - LASTFM_API_KEY=${LASTFM_API_KEY:-}
+      - ACOUSTID_API_KEY=${ACOUSTID_API_KEY:-}
+      - AUDD_API_TOKEN=${AUDD_API_TOKEN:-}
+      - MUSE_SERVICE_URL=${MUSE_SERVICE_URL:-}
+      - MUSICBRAINZ_LOCAL_DB_URL=${MUSICBRAINZ_LOCAL_DB_URL:-}
+      - MUSICBRAINZ_LOCAL_DB_ENABLED=${MUSICBRAINZ_LOCAL_DB_ENABLED:-false}
+      - MUSICBRAINZ_RATE_LIMIT=${MUSICBRAINZ_RATE_LIMIT:-1.0}
+      - CELERY_LOG_LEVEL=${CELERY_LOG_LEVEL:-info}
+      - CELERY_AUTOSCALE_MAX=${CELERY_AUTOSCALE_MAX:-8}
+      - CELERY_AUTOSCALE_MIN=${CELERY_AUTOSCALE_MIN:-2}
+      - TZ=${TZ:-America/New_York}
+    volumes:
+      - ${SABNZBD_DOWNLOAD_DIR:-/downloads/music}:${SABNZBD_DOWNLOAD_DIR:-/downloads/music}:rw
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./docker-compose.yml:/app/compose/docker-compose.yml:rw
+      - ./.env:/app/compose/.env:ro
+      - ${MUSIC_LIBRARY_PATH:-/music}:/music:rw
+      - ${AUDIOBOOKS_PATH:-/audiobooks}:/audio_books:rw
+      - studio54-job-logs:/app/logs/jobs
+      - ${STUDIO54_DATA_DIR:-/docker/studio54}/cover-art:/docker/studio54:rw
+    depends_on:
+      studio54-db:
+        condition: service_healthy
+      studio54-redis:
+        condition: service_healthy
+    networks:
+      - studio54_network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8010/health').read()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+    labels:
+      com.centurylinklabs.watchtower.enable: "${WATCHTOWER_STUDIO54_SERVICE:-true}"
+
+  # ---------------------------------------------------------------------------
+  # Celery Worker (async task processor)
+  # ---------------------------------------------------------------------------
+  studio54-worker:
+    image: studio54/service:latest
+    container_name: studio54-worker
+    restart: unless-stopped
+    command: >
+      celery -A app.tasks.celery_app worker -E
+      --loglevel=${CELERY_LOG_LEVEL:-info}
+      --autoscale=${CELERY_AUTOSCALE_MAX:-8},${CELERY_AUTOSCALE_MIN:-2}
+      --queues=monitoring,celery,search,sync,downloads,scan,ingest_fast,index_metadata,fetch_images,calculate_hashes,organization,library
+    environment:
+      - PYTHONUNBUFFERED=1
+      - DATABASE_URL=postgresql://${STUDIO54_DB_USER:-studio54}:${STUDIO54_DB_PASSWORD}@studio54-db:5432/${STUDIO54_DB_NAME:-studio54_db}
+      - REDIS_URL=redis://studio54-redis:6379/0
+      - CELERY_BROKER_URL=redis://studio54-redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://studio54-redis:6379/0
+      - STUDIO54_ENCRYPTION_KEY=${STUDIO54_ENCRYPTION_KEY}
+      - SABNZBD_HOST=${SABNZBD_HOST:-}
+      - SABNZBD_PORT=${SABNZBD_PORT:-8080}
+      - SABNZBD_API_KEY=${SABNZBD_API_KEY:-}
+      - SABNZBD_DOWNLOAD_DIR=${SABNZBD_DOWNLOAD_DIR:-/downloads/music}
+      - MUSIC_LIBRARY_PATH=${MUSIC_LIBRARY_PATH:-/music}
+      - AUDIOBOOKS_PATH=${AUDIOBOOKS_PATH:-/audiobooks}
+      - OLLAMA_URL=${OLLAMA_URL:-http://localhost:11434}
+      - OLLAMA_EMBEDDING_MODEL=${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.1:8b}
+      - FANART_API_KEY=${FANART_API_KEY:-}
+      - ACOUSTID_API_KEY=${ACOUSTID_API_KEY:-}
+      - MUSE_SERVICE_URL=${MUSE_SERVICE_URL:-}
+      - MUSICBRAINZ_LOCAL_DB_URL=${MUSICBRAINZ_LOCAL_DB_URL:-}
+      - MUSICBRAINZ_LOCAL_DB_ENABLED=${MUSICBRAINZ_LOCAL_DB_ENABLED:-false}
+      - MUSICBRAINZ_RATE_LIMIT=${MUSICBRAINZ_RATE_LIMIT:-1.0}
+      - TZ=${TZ:-America/New_York}
+    volumes:
+      - ${SABNZBD_DOWNLOAD_DIR:-/downloads/music}:${SABNZBD_DOWNLOAD_DIR:-/downloads/music}:rw
+      - ./docker-compose.yml:/app/compose/docker-compose.yml:ro
+      - ${MUSIC_LIBRARY_PATH:-/music}:/music:rw
+      - ${AUDIOBOOKS_PATH:-/audiobooks}:/audio_books:rw
+      - studio54-job-logs:/app/logs/jobs
+      - ${STUDIO54_DATA_DIR:-/docker/studio54}/cover-art:/docker/studio54:rw
+    depends_on:
+      studio54-service:
+        condition: service_healthy
+    networks:
+      - studio54_network
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.tasks.celery_app inspect ping || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    labels:
+      com.centurylinklabs.watchtower.enable: "${WATCHTOWER_STUDIO54_WORKER:-true}"
+      studio54.role: worker
+
+  # ---------------------------------------------------------------------------
+  # Celery Beat (scheduled task dispatcher)
+  # ---------------------------------------------------------------------------
+  studio54-beat:
+    image: studio54/service:latest
+    container_name: studio54-beat
+    restart: unless-stopped
+    command: celery -A app.tasks.celery_app beat --loglevel=${CELERY_LOG_LEVEL:-info}
+    environment:
+      - PYTHONUNBUFFERED=1
+      - DATABASE_URL=postgresql://${STUDIO54_DB_USER:-studio54}:${STUDIO54_DB_PASSWORD}@studio54-db:5432/${STUDIO54_DB_NAME:-studio54_db}
+      - REDIS_URL=redis://studio54-redis:6379/0
+      - CELERY_BROKER_URL=redis://studio54-redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://studio54-redis:6379/0
+      - STUDIO54_ENCRYPTION_KEY=${STUDIO54_ENCRYPTION_KEY}
+      - MUSIC_LIBRARY_PATH=${MUSIC_LIBRARY_PATH:-/music}
+      - AUDIOBOOKS_PATH=${AUDIOBOOKS_PATH:-/audiobooks}
+      - TZ=${TZ:-America/New_York}
+    volumes:
+      - ${MUSIC_LIBRARY_PATH:-/music}:/music:rw
+      - ${AUDIOBOOKS_PATH:-/audiobooks}:/audio_books:rw
+    depends_on:
+      studio54-service:
+        condition: service_healthy
+    networks:
+      - studio54_network
+    labels:
+      com.centurylinklabs.watchtower.enable: "${WATCHTOWER_STUDIO54_BEAT:-true}"
+
+  # ---------------------------------------------------------------------------
+  # Web Frontend (React + Nginx)
+  # ---------------------------------------------------------------------------
+  studio54-web:
+    build:
+      context: ./studio54-web
+      dockerfile: Dockerfile
+    image: studio54/web:latest
+    container_name: studio54-web
+    restart: unless-stopped
+    ports:
+      - "${STUDIO54_WEB_PORT:-8009}:80"
+    depends_on:
+      studio54-service:
+        condition: service_healthy
+    networks:
+      - studio54_network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    labels:
+      com.centurylinklabs.watchtower.enable: "${WATCHTOWER_STUDIO54_WEB:-true}"
+
+  # ---------------------------------------------------------------------------
+  # Log Viewer (Dozzle) — always-on
+  # ---------------------------------------------------------------------------
+  studio54-dozzle:
+    image: amir20/dozzle:latest
+    container_name: studio54-dozzle
+    restart: unless-stopped
+    ports:
+      - "${STUDIO54_DOZZLE_PORT:-9998}:8080"
+    environment:
+      - DOZZLE_NO_ANALYTICS=true
+      - DOZZLE_FILTER=name=studio54
+      - TZ=${TZ:-America/New_York}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - studio54_network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    labels:
+      com.centurylinklabs.watchtower.enable: "${WATCHTOWER_DOZZLE:-true}"
+
+  # ---------------------------------------------------------------------------
+  # Auto-Updater (Watchtower) — optional profile
+  # ---------------------------------------------------------------------------
+  studio54-watchtower:
+    image: containrrr/watchtower:latest
+    container_name: studio54-watchtower
+    restart: unless-stopped
+    profiles: ["watchtower"]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_LABEL_ENABLE=true
+      - WATCHTOWER_POLL_INTERVAL=${WATCHTOWER_INTERVAL:-86400}
+      - TZ=${TZ:-America/New_York}
+    networks:
+      - studio54_network

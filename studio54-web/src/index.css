@@ -1,0 +1,173 @@
+@import 'react-grid-layout/css/styles.css';
+@import 'react-resizable/css/styles.css';
+
+/* RGL resize handle - make visible on dark backgrounds */
+.react-grid-item > .react-resizable-handle::after {
+  border-right: 2px solid rgba(255, 20, 147, 0.6) !important;
+  border-bottom: 2px solid rgba(255, 20, 147, 0.6) !important;
+  width: 8px !important;
+  height: 8px !important;
+}
+.react-grid-item:hover > .react-resizable-handle::after {
+  border-right-color: rgba(255, 20, 147, 0.9) !important;
+  border-bottom-color: rgba(255, 20, 147, 0.9) !important;
+}
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-gray-50 dark:bg-[#0D1117] text-gray-900 dark:text-[#E6EDF3];
+    @apply min-h-screen antialiased;
+  }
+
+  * {
+    @apply border-gray-200 dark:border-[#30363D];
+  }
+}
+
+@layer components {
+  /* Card Component */
+  .card {
+    @apply bg-white dark:bg-[#161B22] rounded-lg shadow-md border dark:border-[#30363D];
+  }
+
+  /* Button Variants */
+  .btn {
+    @apply px-4 py-2 rounded-md font-medium transition-colors;
+    @apply focus:outline-none focus:ring-2 focus:ring-offset-2;
+  }
+
+  .btn-primary {
+    @apply text-white;
+    background: linear-gradient(135deg, #FF1493, #FF8C00);
+    @apply focus:ring-[#FF1493];
+  }
+
+  .btn-primary:hover {
+    background: linear-gradient(135deg, #d10f7a, #e07800);
+  }
+
+  .btn-secondary {
+    @apply bg-gray-200 dark:bg-[#161B22] text-gray-900 dark:text-[#E6EDF3];
+    @apply hover:bg-gray-300 dark:hover:bg-[#30363D];
+    @apply focus:ring-[#8B949E];
+  }
+
+  .btn-danger {
+    @apply bg-red-600 text-white hover:bg-red-700;
+    @apply focus:ring-red-500;
+  }
+
+  /* Input Styles */
+  .input {
+    @apply w-full px-3 py-2 border rounded-md;
+    @apply bg-white dark:bg-[#161B22];
+    @apply focus:outline-none focus:ring-2 focus:ring-[#FF1493];
+  }
+
+  /* Badge Component */
+  .badge {
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium;
+  }
+
+  .badge-success {
+    @apply bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200;
+  }
+
+  .badge-warning {
+    @apply bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200;
+  }
+
+  .badge-danger {
+    @apply bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200;
+  }
+
+  .badge-info {
+    @apply bg-[#FF1493]/10 text-[#FF1493] dark:bg-[#FF1493]/20 dark:text-[#FF8CB8];
+  }
+
+  /* Table Styles */
+  .table {
+    @apply min-w-full divide-y divide-gray-200 dark:divide-[#30363D];
+  }
+
+  .table-header {
+    @apply bg-gray-50 dark:bg-[#0D1117];
+  }
+
+  .table-cell {
+    @apply px-3 py-3 whitespace-nowrap text-sm md:px-6 md:py-4;
+  }
+}
+
+@layer utilities {
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: #30363D transparent;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background-color: #30363D;
+    border-radius: 4px;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+    background-color: #484F58;
+  }
+
+  .scrollbar-dark {
+    scrollbar-width: thin;
+    scrollbar-color: #000000 transparent;
+  }
+
+  .scrollbar-dark::-webkit-scrollbar {
+    width: 5px;
+  }
+
+  .scrollbar-dark::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .scrollbar-dark::-webkit-scrollbar-thumb {
+    background-color: #000000;
+    border-radius: 3px;
+  }
+
+  .scrollbar-dark::-webkit-scrollbar-thumb:hover {
+    background-color: #1a1a1a;
+  }
+
+  .sidebar-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: #30363D transparent;
+  }
+
+  .sidebar-scroll::-webkit-scrollbar {
+    width: 5px;
+  }
+
+  .sidebar-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .sidebar-scroll::-webkit-scrollbar-thumb {
+    background-color: #30363D;
+    border-radius: 3px;
+  }
+
+  .sidebar-scroll::-webkit-scrollbar-thumb:hover {
+    background-color: #484F58;
+  }
+}

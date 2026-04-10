@@ -1,0 +1,23 @@
+[Unit]
+Description=Studio54 Music & Audiobook Management
+Documentation=https://github.com/tesimmons/Studio54
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=__USER__
+WorkingDirectory=__INSTALL_DIR__
+
+ExecStartPre=/usr/bin/docker compose -f __INSTALL_DIR__/docker-compose.yml --env-file __INSTALL_DIR__/.env pull --quiet studio54-db studio54-redis
+ExecStart=/usr/bin/docker compose -f __INSTALL_DIR__/docker-compose.yml --env-file __INSTALL_DIR__/.env up -d
+ExecStop=/usr/bin/docker compose -f __INSTALL_DIR__/docker-compose.yml --env-file __INSTALL_DIR__/.env stop
+ExecReload=/usr/bin/docker compose -f __INSTALL_DIR__/docker-compose.yml --env-file __INSTALL_DIR__/.env restart
+
+TimeoutStartSec=300
+TimeoutStopSec=120
+
+[Install]
+WantedBy=multi-user.target
