@@ -165,7 +165,15 @@ cmd_start() {
         dc up -d "$service"
     else
         log_header "Starting Studio54"
-        dc up -d
+        # shellcheck disable=SC1090
+        [[ -f "$ENV_FILE" ]] && source "$ENV_FILE" 2>/dev/null || true
+        # In standalone mode, ensure the dozzle profile is active if not explicitly set
+        if [[ -z "${STUDIO54_MANAGED_BY:-}" && -z "${COMPOSE_PROFILES:-}" ]]; then
+            log_info "Standalone mode — enabling Dozzle (log viewer)"
+            COMPOSE_PROFILES=dozzle dc up -d
+        else
+            dc up -d
+        fi
     fi
     sleep 2
     docker ps --filter "name=studio54" --format "table {{.Names}}\t{{.Status}}"

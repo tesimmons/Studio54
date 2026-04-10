@@ -85,6 +85,7 @@ services:
       - CELERY_BROKER_URL=redis://studio54-redis:6379/0
       - CELERY_RESULT_BACKEND=redis://studio54-redis:6379/0
       - STUDIO54_ENCRYPTION_KEY=${STUDIO54_ENCRYPTION_KEY}
+      - STUDIO54_MANAGED_BY=${STUDIO54_MANAGED_BY:-}
       - SABNZBD_HOST=${SABNZBD_HOST:-}
       - SABNZBD_PORT=${SABNZBD_PORT:-8080}
       - SABNZBD_API_KEY=${SABNZBD_API_KEY:-}
@@ -150,6 +151,7 @@ services:
       - CELERY_BROKER_URL=redis://studio54-redis:6379/0
       - CELERY_RESULT_BACKEND=redis://studio54-redis:6379/0
       - STUDIO54_ENCRYPTION_KEY=${STUDIO54_ENCRYPTION_KEY}
+      - STUDIO54_MANAGED_BY=${STUDIO54_MANAGED_BY:-}
       - SABNZBD_HOST=${SABNZBD_HOST:-}
       - SABNZBD_PORT=${SABNZBD_PORT:-8080}
       - SABNZBD_API_KEY=${SABNZBD_API_KEY:-}
@@ -244,12 +246,17 @@ services:
       com.centurylinklabs.watchtower.enable: "${WATCHTOWER_STUDIO54_WEB:-true}"
 
   # ---------------------------------------------------------------------------
-  # Log Viewer (Dozzle) — always-on
+  # Log Viewer (Dozzle) — optional profile
+  # Enabled by default in standalone mode.
+  # Skip when managed by MasterControl (which provides its own Dozzle).
+  # Enable with: docker compose --profile dozzle up -d
+  # or set COMPOSE_PROFILES=dozzle in .env
   # ---------------------------------------------------------------------------
   studio54-dozzle:
     image: amir20/dozzle:latest
     container_name: studio54-dozzle
     restart: unless-stopped
+    profiles: ["dozzle"]
     ports:
       - "${STUDIO54_DOZZLE_PORT:-9998}:8080"
     environment:
@@ -271,6 +278,8 @@ services:
 
   # ---------------------------------------------------------------------------
   # Auto-Updater (Watchtower) — optional profile
+  # Skip when managed by MasterControl (which provides its own Watchtower).
+  # Enable with: docker compose --profile watchtower up -d
   # ---------------------------------------------------------------------------
   studio54-watchtower:
     image: containrrr/watchtower:latest
