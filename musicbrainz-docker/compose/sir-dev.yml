@@ -1,0 +1,19 @@
+# Description: Build and run local development copy of SIR
+
+services:
+  indexer:
+    build:
+      context: build/sir-dev
+      args:
+        - PYTHON_VERSION=${SIR_DEV_PYTHON_VERSION:-3.13}
+        - BASE_IMAGE_DATE=${SIR_DEV_BASE_IMAGE_DATE:-20250313}
+        - SIR_VERSION=${SIR_DEV_VERSION:-py313-stage1}
+    env_file:
+      - ./default/postgres.env
+    volumes:
+      - ${SIR_DEV_LOCAL_ROOT:-../sir}:/code
+      - ${SIR_DEV_CONFIG_PATH:-./default/indexer.ini}:/code/config.ini
+    depends_on:
+      - db
+      - mq
+      - search

@@ -1,0 +1,6 @@
+# Description: Run MusicBrainz Server in standalone mode for test purpose
+
+services:
+  musicbrainz:
+    environment:
+      - MUSICBRAINZ_STANDALONE_SERVER=1

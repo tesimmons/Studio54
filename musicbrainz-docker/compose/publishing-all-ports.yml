@@ -1,0 +1,16 @@
+# Description: Publish all service ports on the host
+
+services:
+  db:
+    ports:
+      - "${MUSICBRAINZ_DOCKER_HOST_IPADDRCOL:-}5432:5432"
+  search:
+    ports:
+      - "${MUSICBRAINZ_DOCKER_HOST_IPADDRCOL:-}8983:8983"
+  mq:
+    ports:
+      - "${MUSICBRAINZ_DOCKER_HOST_IPADDRCOL:-}5672:5672"
+      - "${MUSICBRAINZ_DOCKER_HOST_IPADDRCOL:-}15672:15672"
+  redis:
+    ports:
+      - "${MUSICBRAINZ_DOCKER_HOST_IPADDRCOL:-}6379:6379"

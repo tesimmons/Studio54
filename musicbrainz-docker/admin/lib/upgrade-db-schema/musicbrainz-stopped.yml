@@ -1,0 +1,5 @@
+# Description: Stopped MusicBrainz Server for database schema upgrade
+
+services:
+  musicbrainz:
+    command: /bin/sleep infinity
