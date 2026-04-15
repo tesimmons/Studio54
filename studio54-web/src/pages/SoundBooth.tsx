@@ -1,11 +1,14 @@
 import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
-import { playlistsApi, nowPlayingApi } from '../api/client'
+import { playlistsApi, bookPlaylistsApi, albumsApi, nowPlayingApi } from '../api/client'
 import type { NowPlayingListener } from '../api/client'
-import { FiMusic, FiPlay, FiUser, FiChevronDown, FiChevronUp, FiHeadphones } from 'react-icons/fi'
+import {
+  FiMusic, FiPlay, FiHeadphones, FiBook, FiPlus, FiCheck,
+  FiChevronDown, FiLoader,
+} from 'react-icons/fi'
 import { S54 } from '../assets/graphics'
-import type { PlaylistDetail, PlaylistTrack } from '../types'
+import type { Playlist, BookPlaylist, Album } from '../types'
 import { usePlayer } from '../contexts/PlayerContext'
 
 const ROLE_BADGES: Record<string, { label: string; color: string }> = {
@@ -16,31 +19,22 @@ const ROLE_BADGES: Record<string, { label: string; color: string }> = {
 }
 
 function getInitials(name: string): string {
-  return name
-    .split(/\s+/)
-    .map(w => w[0])
-    .join('')
-    .toUpperCase()
-    .slice(0, 2)
+  return name.split(/\s+/).map(w => w[0]).join('').toUpperCase().slice(0, 2)
 }
+
+// ── Now Listening card ──────────────────────────────────────────────────────
 
 function ListenerCard({ listener }: { listener: NowPlayingListener }) {
   const badge = ROLE_BADGES[listener.role] || ROLE_BADGES.partygoer
   const navigate = useNavigate()
 
   const handleAlbumClick = () => {
-    if (listener.album_id) {
-      navigate(`/disco-lounge/albums/${listener.album_id}`)
-    } else if (listener.artist_id) {
-      navigate(`/disco-lounge/artists/${listener.artist_id}`)
-    }
+    if (listener.album_id) navigate(`/disco-lounge/albums/${listener.album_id}`)
+    else if (listener.artist_id) navigate(`/disco-lounge/artists/${listener.artist_id}`)
   }
 
   const handleArtistClick = (e: React.MouseEvent) => {
-    if (listener.artist_id) {
-      e.stopPropagation()
-      navigate(`/disco-lounge/artists/${listener.artist_id}`)
-    }
+    if (listener.artist_id) { e.stopPropagation(); navigate(`/disco-lounge/artists/${listener.artist_id}`) }
   }
 
   const isClickable = !!(listener.album_id || listener.artist_id)
@@ -50,20 +44,14 @@ function ListenerCard({ listener }: { listener: NowPlayingListener }) {
       className={`flex items-center gap-3 p-3 rounded-xl bg-gray-50 dark:bg-[#161B22]/60 border border-gray-200 dark:border-[#30363D]/50 min-w-[220px] max-w-[280px] transition-colors ${isClickable ? 'cursor-pointer hover:bg-gray-100 dark:hover:bg-[#1C2128]/60' : ''}`}
       onClick={isClickable ? handleAlbumClick : undefined}
     >
-      {/* Avatar or album art */}
       <div className="relative flex-shrink-0">
         {listener.cover_art_url ? (
-          <img
-            src={listener.cover_art_url}
-            alt=""
-            className="w-10 h-10 rounded-lg object-cover"
-          />
+          <img src={listener.cover_art_url} alt="" className="w-10 h-10 rounded-lg object-cover" />
         ) : (
-          <div className="w-10 h-10 rounded-lg bg-[#FF1493]/50/20 flex items-center justify-center text-[#ff4da6] font-semibold text-sm">
+          <div className="w-10 h-10 rounded-lg bg-[#FF1493]/20 flex items-center justify-center text-[#ff4da6] font-semibold text-sm">
             {getInitials(listener.display_name)}
           </div>
         )}
-        {/* Animated listening indicator */}
         <div className="absolute -bottom-1 -right-1 w-4 h-4 rounded-full bg-green-500 border-2 border-white dark:border-gray-800 flex items-center justify-center">
           <div className="flex items-end gap-[1px] h-2">
             <div className="w-[2px] bg-white rounded-full animate-pulse" style={{ height: '4px', animationDelay: '0ms' }} />
@@ -72,22 +60,14 @@ function ListenerCard({ listener }: { listener: NowPlayingListener }) {
           </div>
         </div>
       </div>
-
-      {/* Info */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1.5">
-          <span className="text-sm font-medium text-gray-900 dark:text-white truncate">
-            {listener.display_name}
-          </span>
-          <span className={`text-[10px] px-1.5 py-0.5 rounded-full border ${badge.color} font-medium leading-none`}>
-            {badge.label}
-          </span>
+          <span className="text-sm font-medium text-gray-900 dark:text-white truncate">{listener.display_name}</span>
+          <span className={`text-[10px] px-1.5 py-0.5 rounded-full border ${badge.color} font-medium leading-none`}>{badge.label}</span>
         </div>
         <p className={`text-xs text-gray-600 dark:text-gray-300 truncate mt-0.5 ${listener.album_id ? 'hover:text-[#ff4da6]' : ''}`}>
           {listener.track_title}
-          {listener.album_title && (
-            <span className="text-gray-400 dark:text-gray-500"> &middot; {listener.album_title}</span>
-          )}
+          {listener.album_title && <span className="text-gray-400 dark:text-gray-500"> &middot; {listener.album_title}</span>}
         </p>
         <p
           className={`text-[11px] truncate ${listener.artist_id ? 'text-[#ff4da6]/80 hover:text-[#ff4da6] cursor-pointer' : 'text-gray-400 dark:text-gray-500'}`}
@@ -100,78 +80,340 @@ function ListenerCard({ listener }: { listener: NowPlayingListener }) {
   )
 }
 
-function SoundBooth() {
-  const [expandedPlaylist, setExpandedPlaylist] = useState<string | null>(null)
-  const { play, playAlbum } = usePlayer()
+// ── Compact playlist row ────────────────────────────────────────────────────
 
-  const { data: publishedData, isLoading } = useQuery({
-    queryKey: ['publishedPlaylists'],
-    queryFn: () => playlistsApi.listPublished(100, 0),
+function MusicPlaylistRow({ playlist, onClick }: { playlist: Playlist; onClick: () => void }) {
+  return (
+    <button
+      className="w-full flex items-center gap-3 px-2 py-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-[#1C2128] transition-colors text-left group"
+      onClick={onClick}
+    >
+      <div className="w-10 h-10 flex-shrink-0 rounded overflow-hidden bg-gray-200 dark:bg-[#21262D]">
+        <img
+          src={playlist.cover_art_url || S54.defaultPlaylistCover}
+          alt={playlist.name}
+          className="w-full h-full object-cover"
+          onError={(e) => { (e.target as HTMLImageElement).src = S54.defaultPlaylistCover }}
+        />
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-medium text-gray-900 dark:text-white truncate group-hover:text-[#FF1493] transition-colors">
+          {playlist.name}
+        </p>
+        <p className="text-xs text-gray-400 dark:text-gray-500 truncate">
+          {playlist.track_count} track{playlist.track_count !== 1 ? 's' : ''}
+          {playlist.owner_name && <span> &middot; {playlist.owner_name}</span>}
+        </p>
+      </div>
+      <FiPlay className="w-3.5 h-3.5 text-gray-400 group-hover:text-[#FF1493] flex-shrink-0 opacity-0 group-hover:opacity-100 transition-all" />
+    </button>
+  )
+}
+
+function BookPlaylistRow({ playlist, onClick }: { playlist: BookPlaylist; onClick: () => void }) {
+  const formatDuration = (ms: number): string => {
+    const h = Math.floor(ms / 3600000)
+    const m = Math.floor((ms % 3600000) / 60000)
+    return h > 0 ? `${h}h ${m}m` : `${m}m`
+  }
+
+  return (
+    <button
+      className="w-full flex items-center gap-3 px-2 py-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-[#1C2128] transition-colors text-left group"
+      onClick={onClick}
+    >
+      <div className="w-10 h-10 flex-shrink-0 rounded overflow-hidden bg-teal-900/30 flex items-center justify-center">
+        <FiBook className="w-5 h-5 text-teal-400" />
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-medium text-gray-900 dark:text-white truncate group-hover:text-teal-400 transition-colors">
+          {playlist.name}
+        </p>
+        <p className="text-xs text-gray-400 dark:text-gray-500 truncate">
+          {playlist.chapter_count} chapter{playlist.chapter_count !== 1 ? 's' : ''}
+          {playlist.total_duration_ms > 0 && <span> &middot; {formatDuration(playlist.total_duration_ms)}</span>}
+        </p>
+      </div>
+      <FiPlay className="w-3.5 h-3.5 text-gray-400 group-hover:text-teal-400 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-all" />
+    </button>
+  )
+}
+
+// ── Add-to-playlist dropdown ────────────────────────────────────────────────
+
+function AddToPlaylistMenu({
+  album,
+  playlists,
+  onClose,
+}: {
+  album: Album
+  playlists: Playlist[]
+  onClose: () => void
+}) {
+  const queryClient = useQueryClient()
+  const [newName, setNewName] = useState('')
+  const [creating, setCreating] = useState(false)
+  const [added, setAdded] = useState<string | null>(null)
+
+  const addMutation = useMutation({
+    mutationFn: async (playlistId: string) => {
+      const detail = await albumsApi.get(album.id)
+      const trackIds = detail.tracks.filter(t => t.has_file).map(t => t.id)
+      if (trackIds.length === 0) throw new Error('No downloaded tracks')
+      await playlistsApi.addTracksBulk(playlistId, trackIds)
+      return playlistId
+    },
+    onSuccess: (playlistId) => {
+      setAdded(playlistId)
+      queryClient.invalidateQueries({ queryKey: ['publishedPlaylists'] })
+      setTimeout(onClose, 800)
+    },
   })
 
+  const createMutation = useMutation({
+    mutationFn: async (name: string) => {
+      const playlist = await playlistsApi.create({ name })
+      const detail = await albumsApi.get(album.id)
+      const trackIds = detail.tracks.filter(t => t.has_file).map(t => t.id)
+      if (trackIds.length > 0) await playlistsApi.addTracksBulk(playlist.id, trackIds)
+      return playlist
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['publishedPlaylists'] })
+      onClose()
+    },
+  })
+
+  return (
+    <div className="absolute right-0 top-full mt-1 z-50 w-56 bg-white dark:bg-[#161B22] border border-gray-200 dark:border-[#30363D] rounded-xl shadow-xl overflow-hidden">
+      <div className="px-3 py-2 border-b border-gray-100 dark:border-[#30363D]">
+        <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Add to Playlist</p>
+        <p className="text-xs text-gray-400 dark:text-gray-500 truncate mt-0.5">{album.title}</p>
+      </div>
+
+      {/* Existing playlists */}
+      <div className="max-h-48 overflow-y-auto py-1">
+        {playlists.length === 0 ? (
+          <p className="text-xs text-gray-400 px-3 py-2">No playlists yet</p>
+        ) : playlists.map(p => (
+          <button
+            key={p.id}
+            className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-gray-50 dark:hover:bg-[#1C2128] text-left transition-colors"
+            onClick={() => addMutation.mutate(p.id)}
+            disabled={addMutation.isPending}
+          >
+            {added === p.id ? (
+              <FiCheck className="w-3.5 h-3.5 text-green-500 flex-shrink-0" />
+            ) : (
+              <FiPlus className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
+            )}
+            <span className="text-sm text-gray-700 dark:text-gray-300 truncate">{p.name}</span>
+          </button>
+        ))}
+      </div>
+
+      {/* Create new */}
+      <div className="border-t border-gray-100 dark:border-[#30363D] px-3 py-2">
+        {creating ? (
+          <div className="flex gap-1.5">
+            <input
+              autoFocus
+              className="flex-1 text-xs px-2 py-1 rounded border border-gray-300 dark:border-[#30363D] bg-white dark:bg-[#0D1117] text-gray-900 dark:text-white outline-none focus:border-[#FF1493]"
+              placeholder="New playlist name…"
+              value={newName}
+              onChange={e => setNewName(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter' && newName.trim()) createMutation.mutate(newName.trim())
+                if (e.key === 'Escape') setCreating(false)
+              }}
+            />
+            <button
+              className="text-xs px-2 py-1 rounded bg-[#FF1493] text-white hover:bg-[#ff4da6] disabled:opacity-50"
+              onClick={() => newName.trim() && createMutation.mutate(newName.trim())}
+              disabled={!newName.trim() || createMutation.isPending}
+            >
+              {createMutation.isPending ? <FiLoader className="w-3 h-3 animate-spin" /> : 'Create'}
+            </button>
+          </div>
+        ) : (
+          <button
+            className="w-full flex items-center gap-2 text-xs text-[#FF1493] hover:text-[#ff4da6] transition-colors"
+            onClick={() => setCreating(true)}
+          >
+            <FiPlus className="w-3.5 h-3.5" />
+            New playlist
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ── Recent album row ────────────────────────────────────────────────────────
+
+function RecentAlbumRow({
+  album,
+  musicPlaylists,
+}: {
+  album: Album
+  musicPlaylists: Playlist[]
+}) {
+  const { playAlbum } = usePlayer()
+  const navigate = useNavigate()
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [playing, setPlaying] = useState(false)
+
+  const handlePlay = async () => {
+    setPlaying(true)
+    try {
+      const detail = await albumsApi.get(album.id)
+      const playable = detail.tracks
+        .filter(t => t.has_file)
+        .map(t => ({
+          id: t.id,
+          title: t.title,
+          has_file: t.has_file,
+          artist_name: (t as any).artist_name ?? (album as any).artist_name ?? '',
+          album_title: album.title,
+          album_cover_art_url: album.cover_art_url,
+          duration_ms: t.duration_ms,
+        }))
+      if (playable.length > 0) playAlbum(playable, 0)
+    } finally {
+      setPlaying(false)
+    }
+  }
+
+  return (
+    <div className="flex items-center gap-3 px-2 py-1.5 rounded-lg hover:bg-gray-50 dark:hover:bg-[#161B22]/60 group transition-colors">
+      {/* Thumbnail */}
+      <div
+        className="w-10 h-10 flex-shrink-0 rounded overflow-hidden bg-gray-200 dark:bg-[#21262D] cursor-pointer"
+        onClick={() => navigate(`/albums/${album.id}`)}
+      >
+        {album.cover_art_url ? (
+          <img
+            src={`/api/v1/albums/${album.id}/cover-art`}
+            alt={album.title}
+            className="w-full h-full object-cover"
+            onError={(e) => { (e.target as HTMLImageElement).src = S54.defaultAlbumArt }}
+          />
+        ) : (
+          <div className="w-full h-full flex items-center justify-center">
+            <FiMusic className="w-4 h-4 text-gray-400" />
+          </div>
+        )}
+      </div>
+
+      {/* Info */}
+      <div
+        className="flex-1 min-w-0 cursor-pointer"
+        onClick={() => navigate(`/albums/${album.id}`)}
+      >
+        <p className="text-sm font-medium text-gray-900 dark:text-white truncate group-hover:text-[#FF1493] transition-colors">
+          {album.title}
+        </p>
+        <p className="text-xs text-gray-400 dark:text-gray-500 truncate">
+          {(album as any).artist_name || ''}
+        </p>
+      </div>
+
+      {/* Actions */}
+      <div className="flex items-center gap-1 flex-shrink-0">
+        <button
+          className="w-7 h-7 flex items-center justify-center rounded-full hover:bg-[#FF1493]/10 text-gray-400 hover:text-[#FF1493] transition-colors"
+          onClick={handlePlay}
+          title="Play album"
+        >
+          {playing
+            ? <FiLoader className="w-3.5 h-3.5 animate-spin" />
+            : <FiPlay className="w-3.5 h-3.5" />
+          }
+        </button>
+
+        <div className="relative">
+          <button
+            className="w-7 h-7 flex items-center justify-center rounded-full hover:bg-[#FF1493]/10 text-gray-400 hover:text-[#FF1493] transition-colors"
+            onClick={() => setMenuOpen(o => !o)}
+            title="Add to playlist"
+          >
+            <FiPlus className="w-3.5 h-3.5" />
+          </button>
+          {menuOpen && (
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setMenuOpen(false)} />
+              <AddToPlaylistMenu
+                album={album}
+                playlists={musicPlaylists}
+                onClose={() => setMenuOpen(false)}
+              />
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Main page ───────────────────────────────────────────────────────────────
+
+function SoundBooth() {
+  const navigate = useNavigate()
+
+  // Now Listening
   const { data: nowPlayingData } = useQuery({
     queryKey: ['nowPlaying'],
     queryFn: () => nowPlayingApi.getListeners(),
     refetchInterval: 10000,
   })
-
-  const playlists = publishedData?.items || []
   const listeners = nowPlayingData?.listeners || []
 
-  const { data: playlistDetail } = useQuery<PlaylistDetail>({
-    queryKey: ['playlist', expandedPlaylist],
-    queryFn: () => playlistsApi.get(expandedPlaylist!),
-    enabled: !!expandedPlaylist,
+  // Music playlists (published)
+  const { data: publishedData, isLoading: playlistsLoading } = useQuery({
+    queryKey: ['publishedPlaylists'],
+    queryFn: () => playlistsApi.listPublished(200, 0),
   })
+  const musicPlaylists: Playlist[] = publishedData?.items || []
 
-  const formatDuration = (ms: number | null): string => {
-    if (!ms) return '--:--'
-    const minutes = Math.floor(ms / 60000)
-    const seconds = Math.floor((ms % 60000) / 1000)
-    return `${minutes}:${seconds.toString().padStart(2, '0')}`
-  }
-
-  const toPlayerTrack = (track: PlaylistTrack) => ({
-    id: track.id,
-    title: track.title,
-    has_file: track.has_file,
-    artist_name: track.artist_name,
-    album_title: track.album_title,
-    album_cover_art_url: track.cover_art_url,
-    duration_ms: track.duration_ms,
+  // All user playlists (for add-to-playlist menu)
+  const { data: allPlaylistsData } = useQuery({
+    queryKey: ['allPlaylists'],
+    queryFn: () => playlistsApi.list(200, 0),
   })
+  const allPlaylists: Playlist[] = allPlaylistsData?.items || []
 
-  const playTrack = (track: PlaylistTrack) => {
-    if (track.has_file) {
-      play(toPlayerTrack(track))
-    }
+  // Book playlists
+  const { data: bookPlaylistsData, isLoading: bookPlaylistsLoading } = useQuery({
+    queryKey: ['bookPlaylists'],
+    queryFn: () => bookPlaylistsApi.list(),
+  })
+  const bookPlaylists: BookPlaylist[] = Array.isArray(bookPlaylistsData) ? bookPlaylistsData : []
+
+  // Recently downloaded music albums
+  const { data: recentData, isLoading: recentLoading } = useQuery({
+    queryKey: ['recentAlbums'],
+    queryFn: () => albumsApi.list({ status: 'downloaded', limit: 20 }),
+  })
+  const recentAlbums: Album[] = recentData?.items || []
+
+  const handleMusicPlaylistClick = (playlist: Playlist) => {
+    navigate(`/playlists/${playlist.id}`)
   }
 
-  const playAll = (detail: PlaylistDetail) => {
-    const playable = detail.tracks.filter(t => t.has_file).map(toPlayerTrack)
-    if (playable.length > 0) {
-      playAlbum(playable, 0)
-    }
-  }
-
-  const shuffleAll = (detail: PlaylistDetail) => {
-    const playable = detail.tracks.filter(t => t.has_file).map(toPlayerTrack)
-    if (playable.length > 0) {
-      const shuffled = [...playable].sort(() => Math.random() - 0.5)
-      playAlbum(shuffled, 0)
-    }
+  const handleBookPlaylistClick = (playlist: BookPlaylist) => {
+    navigate(`/reading-room/series/${playlist.series_id}`)
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <div>
         <h1 className="text-xl md:text-3xl font-bold text-gray-900 dark:text-white">Sound Booth</h1>
-        <p className="mt-2 text-gray-600 dark:text-gray-400">
-          Published playlists from DJs and Directors
+        <p className="mt-1 text-gray-600 dark:text-gray-400 text-sm">
+          Active listeners, playlists, and recently added music
         </p>
       </div>
 
-      {/* Now Listening Section */}
+      {/* ── Now Listening ─────────────────────────────────────────────── */}
       <div className="card p-4">
         <div className="flex items-center gap-2 mb-3">
           <FiHeadphones className="w-4 h-4 text-[#FF1493]" />
@@ -179,127 +421,127 @@ function SoundBooth() {
             Now Listening
           </h2>
           {listeners.length > 0 && (
-            <span className="text-xs bg-[#FF1493]/50/20 text-[#ff4da6] px-2 py-0.5 rounded-full font-medium">
+            <span className="text-xs bg-[#FF1493]/20 text-[#ff4da6] px-2 py-0.5 rounded-full font-medium">
               {listeners.length}
             </span>
           )}
         </div>
         {listeners.length === 0 ? (
-          <p className="text-sm text-gray-400 dark:text-gray-500 italic">
-            No active listeners right now
-          </p>
+          <p className="text-sm text-gray-400 dark:text-gray-500 italic">No active listeners right now</p>
         ) : (
           <div className="flex flex-wrap gap-3">
-            {listeners.map((listener) => (
-              <ListenerCard key={listener.user_id} listener={listener} />
-            ))}
+            {listeners.map(l => <ListenerCard key={l.user_id} listener={l} />)}
           </div>
         )}
       </div>
 
-      {isLoading ? (
-        <div className="flex justify-center py-12">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#FF1493]"></div>
-        </div>
-      ) : playlists.length === 0 ? (
-        <div className="card p-12 text-center">
-          <FiMusic className="w-20 h-20 text-gray-300 dark:text-gray-700 mx-auto mb-4" />
-          <p className="text-lg text-gray-500 dark:text-gray-400">No published playlists yet</p>
-          <p className="text-sm text-gray-400 dark:text-gray-500 mt-2">
-            DJs and Directors can publish playlists from the Playlists page
-          </p>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-          {playlists.map((playlist) => (
-            <div key={playlist.id} className="card overflow-hidden group">
-              {/* Cover Art */}
-              <div
-                className="aspect-square bg-gradient-to-br from-[#FF1493]/20 to-[#FF8C00]/20 flex items-center justify-center relative cursor-pointer"
-                onClick={() => setExpandedPlaylist(expandedPlaylist === playlist.id ? null : playlist.id)}
-              >
-                <img
-                  src={playlist.cover_art_url || S54.defaultPlaylistCover}
-                  alt={playlist.name}
-                  className="w-full h-full object-cover"
-                  onError={(e) => { (e.target as HTMLImageElement).src = S54.defaultPlaylistCover }}
-                />
-                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors flex items-center justify-center">
-                  <div className="opacity-0 group-hover:opacity-100 transition-opacity">
-                    {expandedPlaylist === playlist.id ? (
-                      <FiChevronUp className="w-10 h-10 text-white" />
-                    ) : (
-                      <FiChevronDown className="w-10 h-10 text-white" />
-                    )}
-                  </div>
-                </div>
-              </div>
+      {/* ── Two-column body ────────────────────────────────────────────── */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
 
-              {/* Info */}
-              <div className="p-4">
-                <h3 className="font-semibold text-gray-900 dark:text-white truncate">{playlist.name}</h3>
-                <div className="flex items-center gap-2 mt-1 text-sm text-gray-500 dark:text-gray-400">
-                  <FiUser className="w-3 h-3" />
-                  <span className="truncate">{playlist.owner_name || 'Unknown'}</span>
-                </div>
-                <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
-                  {playlist.track_count} track{playlist.track_count !== 1 ? 's' : ''}
-                </p>
-              </div>
+        {/* LEFT: Playlists ─────────────────────────────────────────────── */}
+        <div className="card p-4 space-y-4">
+          <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wide flex items-center gap-2">
+            <FiMusic className="w-4 h-4 text-[#FF1493]" />
+            Playlists
+          </h2>
 
-              {/* Expanded track list */}
-              {expandedPlaylist === playlist.id && playlistDetail && (
-                <div className="border-t border-gray-200 dark:border-[#30363D]">
-                  <div className="p-3 flex items-center justify-between bg-gray-50 dark:bg-[#161B22]/50">
-                    <span className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Tracks</span>
-                    <div className="flex items-center gap-1">
-                      <button
-                        className="btn btn-primary btn-sm py-1 px-3 text-xs"
-                        onClick={() => playAll(playlistDetail)}
-                        disabled={!playlistDetail.tracks.some(t => t.has_file)}
-                      >
-                        <FiPlay className="w-3 h-3 mr-1" />
-                        Play All
-                      </button>
-                      <button
-                        className="btn btn-secondary btn-sm py-1 px-3 text-xs"
-                        onClick={() => shuffleAll(playlistDetail)}
-                        disabled={!playlistDetail.tracks.some(t => t.has_file)}
-                      >
-                        <img src={S54.player.shuffle} alt="Shuffle" className="w-3 h-3 mr-1" />
-                        Shuffle
-                      </button>
-                    </div>
-                  </div>
-                  <div className="max-h-64 overflow-y-auto divide-y divide-gray-100 dark:divide-[#30363D]">
-                    {playlistDetail.tracks.map((track, idx) => (
-                      <div
-                        key={track.id}
-                        className="px-4 py-2 flex items-center gap-3 hover:bg-gray-50 dark:hover:bg-[#161B22]/50 transition-colors"
-                      >
-                        <span className="text-xs text-gray-400 w-5 text-right">{idx + 1}</span>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm text-gray-900 dark:text-white truncate">{track.title}</p>
-                          <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{track.artist_name}</p>
-                        </div>
-                        <span className="text-xs text-gray-400">{formatDuration(track.duration_ms)}</span>
-                        {track.has_file && (
-                          <button
-                            className="text-[#FF1493] hover:text-[#ff4da6]"
-                            onClick={() => playTrack(track)}
-                          >
-                            <FiPlay className="w-4 h-4" />
-                          </button>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </div>
+          {/* Books section */}
+          <div>
+            <div className="flex items-center gap-2 mb-2">
+              <FiBook className="w-3.5 h-3.5 text-teal-400" />
+              <span className="text-xs font-semibold text-teal-500 dark:text-teal-400 uppercase tracking-wider">
+                Books
+              </span>
+              {bookPlaylists.length > 0 && (
+                <span className="text-xs text-gray-400">({bookPlaylists.length})</span>
               )}
             </div>
-          ))}
+            {bookPlaylistsLoading ? (
+              <div className="flex justify-center py-4">
+                <FiLoader className="w-4 h-4 animate-spin text-gray-400" />
+              </div>
+            ) : bookPlaylists.length === 0 ? (
+              <p className="text-xs text-gray-400 dark:text-gray-500 italic px-2 py-1">
+                No book playlists — create one from a series page
+              </p>
+            ) : (
+              <div className="space-y-0.5 max-h-64 overflow-y-auto">
+                {bookPlaylists.map(p => (
+                  <BookPlaylistRow
+                    key={p.id}
+                    playlist={p}
+                    onClick={() => handleBookPlaylistClick(p)}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="border-t border-gray-100 dark:border-[#30363D]" />
+
+          {/* Music section */}
+          <div>
+            <div className="flex items-center gap-2 mb-2">
+              <FiMusic className="w-3.5 h-3.5 text-[#FF1493]" />
+              <span className="text-xs font-semibold text-[#FF1493] uppercase tracking-wider">
+                Music
+              </span>
+              {musicPlaylists.length > 0 && (
+                <span className="text-xs text-gray-400">({musicPlaylists.length})</span>
+              )}
+            </div>
+            {playlistsLoading ? (
+              <div className="flex justify-center py-4">
+                <FiLoader className="w-4 h-4 animate-spin text-gray-400" />
+              </div>
+            ) : musicPlaylists.length === 0 ? (
+              <p className="text-xs text-gray-400 dark:text-gray-500 italic px-2 py-1">
+                No published playlists — DJs and Directors can publish from the Playlists page
+              </p>
+            ) : (
+              <div className="space-y-0.5 max-h-64 overflow-y-auto">
+                {musicPlaylists.map(p => (
+                  <MusicPlaylistRow
+                    key={p.id}
+                    playlist={p}
+                    onClick={() => handleMusicPlaylistClick(p)}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
         </div>
-      )}
+
+        {/* RIGHT: Recently Downloaded ──────────────────────────────────── */}
+        <div className="card p-4">
+          <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wide flex items-center gap-2 mb-3">
+            <FiChevronDown className="w-4 h-4 text-[#FF8C00]" />
+            Recently Added Music
+            <span className="text-xs text-gray-400 font-normal normal-case tracking-normal">last 20</span>
+          </h2>
+
+          {recentLoading ? (
+            <div className="flex justify-center py-8">
+              <FiLoader className="w-5 h-5 animate-spin text-gray-400" />
+            </div>
+          ) : recentAlbums.length === 0 ? (
+            <div className="text-center py-8">
+              <FiMusic className="w-10 h-10 text-gray-300 dark:text-gray-700 mx-auto mb-2" />
+              <p className="text-sm text-gray-400 dark:text-gray-500">No downloaded albums yet</p>
+            </div>
+          ) : (
+            <div className="space-y-0.5 max-h-[36rem] overflow-y-auto">
+              {recentAlbums.map(album => (
+                <RecentAlbumRow
+                  key={album.id}
+                  album={album}
+                  musicPlaylists={allPlaylists}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   )
 }

@@ -24,11 +24,11 @@ const navItems: NavItem[] = [
   { to: '/dashboard', iconSrc: S54.nav.statistics, label: 'Dashboard', minRole: 'dj' },
   { to: '/disco-lounge', iconSrc: S54.nav.discoLounge, label: 'Disco Lounge' },
   { to: '/reading-room', iconSrc: S54.nav.readingRoom, label: 'Reading Room' },
+  { to: '/sound-booth', iconSrc: S54.nav.soundBooth, label: 'Sound Booth' },
   { to: '/listen', iconSrc: S54.nav.listenAdd, label: 'Listen' },
   { to: '/albums', iconSrc: S54.nav.albums, label: 'Albums' },
   { to: '/file-management', iconSrc: S54.nav.fileManagement, label: 'File Management', minRole: 'dj' },
   { to: '/playlists', iconSrc: S54.nav.playlists, label: 'Playlists' },
-  { to: '/sound-booth', iconSrc: S54.nav.soundBooth, label: 'Sound Booth' },
   { to: '/dj-requests', iconSrc: S54.nav.djRequest, label: 'DJ Requests' },
   { to: '/calendar', iconSrc: S54.nav.calendar, label: 'Calendar' },
   { to: '/activity', iconSrc: S54.nav.activity, label: 'Activity', minRole: 'dj' },
@@ -95,7 +95,7 @@ function Layout() {
       )}
 
       {/* Sidebar */}
-      <aside className={`fixed inset-y-0 left-0 z-40 w-64 bg-white dark:bg-[#161B22] border-r border-gray-200 dark:border-[#30363D] flex flex-col transform transition-transform duration-200 ease-in-out ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'} md:relative md:translate-x-0 ${hasPlayer && !isPopOutOpen ? 'pb-48 md:pb-36 lg:pb-40 xl:pb-48' : hasPlayer && isPopOutOpen ? 'pb-20' : ''}`}>
+      <aside className={`fixed inset-y-0 left-0 z-40 w-48 bg-white dark:bg-[#161B22] border-r border-gray-200 dark:border-[#30363D] flex flex-col transform transition-transform duration-200 ease-in-out ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'} md:relative md:translate-x-0 ${hasPlayer && !isPopOutOpen ? 'pb-48 md:pb-36 lg:pb-40 xl:pb-48' : hasPlayer && isPopOutOpen ? 'pb-20' : ''}`}>
         {/* Logo - clickable for About popup */}
         <div className="flex items-center h-24 border-b border-gray-200 dark:border-[#30363D]">
           <button
