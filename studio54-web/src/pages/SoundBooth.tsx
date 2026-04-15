@@ -293,7 +293,7 @@ function RecentAlbumRow({
       >
         {album.cover_art_url ? (
           <img
-            src={`/api/v1/albums/${album.id}/cover-art`}
+            src={`/api/v1/${album.id}/cover-art`}
             alt={album.title}
             className="w-full h-full object-cover"
             onError={(e) => { (e.target as HTMLImageElement).src = S54.defaultAlbumArt }}

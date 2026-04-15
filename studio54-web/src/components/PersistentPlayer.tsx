@@ -432,11 +432,12 @@ function PersistentPlayer() {
         <div className="fixed bottom-0 left-0 right-0 h-14 bg-white dark:bg-[#161B22] border-t border-gray-200 dark:border-[#30363D] z-50 flex items-center px-4 shadow-lg">
           {/* Album Art Thumbnail */}
           <div className="w-10 h-10 rounded bg-gray-200 dark:bg-[#0D1117] flex-shrink-0 overflow-hidden mr-3">
-            {currentTrack.album_cover_art_url ? (
-              <img src={currentTrack.album_cover_art_url} alt="" className="w-full h-full object-cover" />
-            ) : (
-              <img src={S54.defaultAlbumArt} alt="" className="w-full h-full object-cover" />
-            )}
+            <img
+              src={currentTrack.album_cover_art_url || S54.defaultAlbumArt}
+              alt=""
+              className="w-full h-full object-cover"
+              onError={(e) => { (e.target as HTMLImageElement).src = S54.defaultAlbumArt }}
+            />
           </div>
 
           {/* Track Info */}
@@ -531,15 +532,12 @@ function PersistentPlayer() {
               onClick={() => { if (currentTrack.album_id) navigate(`/disco-lounge/albums/${currentTrack.album_id}`) }}
               title={currentTrack.album_title ? `Go to ${currentTrack.album_title}` : 'Go to album'}
             >
-              {currentTrack.album_cover_art_url ? (
-                <img
-                  src={currentTrack.album_cover_art_url}
-                  alt=""
-                  className="w-full h-full object-cover"
-                />
-              ) : (
-                <img src={S54.defaultAlbumArt} alt="" className="w-full h-full object-cover" />
-              )}
+              <img
+                src={currentTrack.album_cover_art_url || S54.defaultAlbumArt}
+                alt=""
+                className="w-full h-full object-cover"
+                onError={(e) => { (e.target as HTMLImageElement).src = S54.defaultAlbumArt }}
+              />
             </button>
             <div className="ml-3 min-w-0">
               <button
