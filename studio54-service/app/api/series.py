@@ -97,9 +97,20 @@ async def list_series(
         .subquery()
     )
 
+    # Subquery: first book id per series (lowest series_position NULLS LAST, then title)
+    # .distinct(col) generates PostgreSQL DISTINCT ON (col)
+    first_book_sq = (
+        db.query(Book.series_id, Book.id.label('first_book_id'))
+        .filter(Book.series_id.isnot(None))
+        .order_by(Book.series_id, Book.series_position.asc().nullslast(), Book.title)
+        .distinct(Book.series_id)
+        .subquery()
+    )
+
     query = (
-        db.query(Series, book_counts_sq.c.total_books)
+        db.query(Series, book_counts_sq.c.total_books, first_book_sq.c.first_book_id)
         .outerjoin(book_counts_sq, Series.id == book_counts_sq.c.series_id)
+        .outerjoin(first_book_sq, Series.id == first_book_sq.c.series_id)
         .options(joinedload(Series.author))
     )
 
@@ -141,9 +152,10 @@ async def list_series(
                 "monitored": series.monitored,
                 "book_count": int(book_count or 0),
                 "cover_art_url": series.cover_art_url,
+                "first_book_id": str(first_book_id) if first_book_id else None,
                 "added_at": series.added_at.isoformat() if series.added_at else None,
             }
-            for series, book_count in results
+            for series, book_count, first_book_id in results
         ]
     }
 

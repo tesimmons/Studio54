@@ -216,6 +216,7 @@ export interface Series {
   book_count?: number
   monitored: boolean
   cover_art_url: string | null
+  first_book_id: string | null
   added_at?: string
   updated_at?: string
 }
@@ -226,6 +227,8 @@ export interface Book {
   title: string
   author_id: string
   author_name?: string
+  credit_name?: string | null
+  co_authors?: string[]
   musicbrainz_id: string | null
   release_mbid: string | null
   release_date: string | null
@@ -234,6 +237,8 @@ export interface Book {
   status: BookStatus
   monitored: boolean
   cover_art_url: string | null
+  genre?: string | null
+  description?: string | null
   custom_folder_path: string | null
   chapter_count: number
   linked_files_count?: number
@@ -574,6 +579,8 @@ export interface DashboardPreferences {
   version: number
   layouts: { lg: DashboardLayoutItem[]; md?: DashboardLayoutItem[]; sm?: DashboardLayoutItem[] }
   hiddenWidgets: string[]
+  /** Per-instance config keyed by layout item id (e.g. "library-size__1745001234567") */
+  widgetSettings?: Record<string, Record<string, unknown>>
 }
 
 export interface UserPreferences {
@@ -590,6 +597,8 @@ export interface WidgetDefinition {
   minSize: { w: number; h: number }
   requiredRole?: 'director'
   libraryType?: 'music' | 'audiobook'
+  /** When true, multiple instances can be added; each carries its own settings */
+  configurable?: boolean
   component: React.ComponentType<WidgetComponentProps>
 }
 
@@ -597,6 +606,10 @@ export interface WidgetComponentProps {
   widgetId: string
   isEditMode: boolean
   libraryType?: 'music' | 'audiobook'
+  /** Per-instance settings passed from Dashboard */
+  widgetSettings?: Record<string, unknown>
+  /** Callback to persist updated settings for this instance */
+  onSettingsChange?: (settings: Record<string, unknown>) => void
 }
 
 // Storage Mount Types

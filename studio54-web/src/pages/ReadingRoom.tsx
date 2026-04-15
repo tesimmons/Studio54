@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { useSearchParamState } from '../hooks/useSearchParamState'
-import { FiSearch, FiPlus, FiRefreshCw, FiX, FiBook, FiDownload, FiCheck, FiLoader, FiFileText, FiChevronUp, FiChevronDown, FiEdit2, FiSave, FiTrash2, FiMoreVertical } from 'react-icons/fi'
+import { FiSearch, FiPlus, FiRefreshCw, FiX, FiBook, FiDownload, FiCheck, FiLoader, FiFileText, FiChevronUp, FiChevronDown, FiEdit2, FiSave, FiTrash2, FiMoreVertical, FiUserPlus, FiStar, FiLink } from 'react-icons/fi'
 import Pagination from '../components/Pagination'
 import toast, { Toaster } from 'react-hot-toast'
 import LibraryScanner from './LibraryScanner'
@@ -10,6 +10,9 @@ import { S54 } from '../assets/graphics'
 import { useAuth } from '../contexts/AuthContext'
 import { authorsApi, booksApi, seriesApi, fileOrganizationApi, jobsApi, authFetch } from '../api/client'
 import type { Author, Book, Series, UnlinkedFile, UnorganizedFile } from '../types'
+import MoveToAuthorModal from '../components/MoveToAuthorModal'
+import MergeAuthorsModal from '../components/MergeAuthorsModal'
+import SetLeadAuthorModal from '../components/SetLeadAuthorModal'
 
 type TabMode = 'browse' | 'scanner' | 'import' | 'unlinked' | 'unorganized'
 type SortMode = 'author' | 'book' | 'series'
@@ -38,6 +41,12 @@ function ReadingRoom() {
   const [seriesSortBy, setSeriesSortBy] = useSearchParamState('seriesSort', 'name') as [SeriesSortBy, (v: string) => void]
   const [bulkDeleteDialogOpen, setBulkDeleteDialogOpen] = useState(false)
   const [bulkDeleteFiles, setBulkDeleteFiles] = useState(false)
+  const [bookBulkMode, setBookBulkMode] = useState(false)
+  const [selectedBookIds, setSelectedBookIds] = useState<Set<string>>(new Set())
+  const [showMoveToAuthorModal, setShowMoveToAuthorModal] = useState(false)
+  const [showMergeAuthorsModal, setShowMergeAuthorsModal] = useState(false)
+  const [bookMenuOpenId, setBookMenuOpenId] = useState<string | null>(null)
+  const [bookForLeadModal, setBookForLeadModal] = useState<Book | null>(null)
   const [mbSearchQuery, setMbSearchQuery] = useState('')
   const [mbResults, setMbResults] = useState<any[]>([])
   const [mbSearching, setMbSearching] = useState(false)
@@ -186,6 +195,22 @@ function ReadingRoom() {
     },
   })
 
+  // Resolve all unlinked audiobook files
+  const resolveUnlinkedMutation = useMutation({
+    mutationFn: () => fileOrganizationApi.resolveUnlinkedFiles(),
+    onSuccess: (data) => {
+      toast.success(`Resolution job started — job ID: ${data.job_id}`)
+      setTimeout(() => {
+        refetchUnlinked()
+        queryClient.invalidateQueries({ queryKey: ['reading-room-unlinked-summary'] })
+      }, 3000)
+    },
+    onError: (err: any) => {
+      const msg = err?.response?.data?.detail || 'Failed to start resolve job'
+      toast.error(msg)
+    },
+  })
+
   // Fetch unorganized files when on unorganized tab
   const { data: unorganizedData, isLoading: unorganizedLoading, refetch: refetchUnorganized } = useQuery({
     queryKey: ['reading-room-unorganized-files', unorganizedSearch, unorganizedFormatFilter, unorganizedPage, unorganizedSortBy, unorganizedSortDir],
@@ -299,6 +324,74 @@ function ReadingRoom() {
     }
   })
 
+  // Merge authors mutation
+  const mergeAuthorsMutation = useMutation({
+    mutationFn: ({ sourceIds, targetId }: { sourceIds: string[]; targetId: string }) =>
+      authorsApi.merge(sourceIds, targetId),
+    onSuccess: (data) => {
+      const n = data.merged_author_names.length
+      toast.success(
+        `Merged ${n} author${n !== 1 ? 's' : ''} into "${data.target_author_name}" — ${data.books_moved} book${data.books_moved !== 1 ? 's' : ''} moved`
+      )
+      setSelectedIds(new Set())
+      setBulkMode(false)
+      setShowMergeAuthorsModal(false)
+      queryClient.invalidateQueries({ queryKey: ['reading-room-authors'] })
+    },
+    onError: (err: any) => {
+      toast.error(err?.response?.data?.detail || 'Merge failed')
+    },
+  })
+
+  // Bulk move books mutation
+  const bulkMoveToAuthorMutation = useMutation({
+    mutationFn: (opts: { authorId?: string; newAuthorName?: string }) =>
+      booksApi.bulkMoveToAuthor(Array.from(selectedBookIds), opts),
+    onSuccess: (data) => {
+      const msg = data.stub_created
+        ? `Moved ${data.moved_count} book${data.moved_count !== 1 ? 's' : ''} to new author "${data.author_name}" — metadata fetch queued`
+        : `Moved ${data.moved_count} book${data.moved_count !== 1 ? 's' : ''} to "${data.author_name}" — file tags updating`
+      toast.success(msg)
+      setSelectedBookIds(new Set())
+      setBookBulkMode(false)
+      setShowMoveToAuthorModal(false)
+      queryClient.invalidateQueries({ queryKey: ['reading-room-books'] })
+      queryClient.invalidateQueries({ queryKey: ['reading-room-authors'] })
+    },
+    onError: (err: any) => {
+      toast.error(err?.response?.data?.detail || 'Failed to move books')
+    },
+  })
+
+  // Set lead author mutation (from book card context menu)
+  const setLeadInRoomMutation = useMutation({
+    mutationFn: ({ bookId, leadName }: { bookId: string; leadName: string }) =>
+      booksApi.setLeadAuthor(bookId, leadName),
+    onSuccess: (data) => {
+      toast.success(`Lead author set to "${data.lead_author}" — file tags updating`)
+      setBookForLeadModal(null)
+      queryClient.invalidateQueries({ queryKey: ['reading-room-books'] })
+    },
+    onError: (err: any) => {
+      toast.error(err?.response?.data?.detail || 'Failed to set lead author')
+    },
+  })
+
+  const toggleBookSelection = (id: string) => {
+    const next = new Set(selectedBookIds)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    setSelectedBookIds(next)
+  }
+
+  const toggleSelectAllBooks = () => {
+    if (selectedBookIds.size === books.length) {
+      setSelectedBookIds(new Set())
+    } else {
+      setSelectedBookIds(new Set(books.map((b: Book) => b.id)))
+    }
+  }
+
   const toggleSelection = (id: string) => {
     const newSelected = new Set(selectedIds)
     if (newSelected.has(id)) {
@@ -335,7 +428,7 @@ function ReadingRoom() {
       }}
     >
       {/* Author Image */}
-      <div className="relative bg-gradient-to-br from-[#FF1493] to-[#FF8C00] h-32 flex items-center justify-center overflow-hidden">
+      <div className="relative bg-gradient-to-br from-[#FF1493] to-[#FF8C00] aspect-[4/5] flex items-center justify-center overflow-hidden">
         {author.image_url ? (
           <img
             src={`/api/v1/authors/${author.id}/cover-art`}
@@ -385,17 +478,66 @@ function ReadingRoom() {
   const renderBookCard = (book: Book) => (
     <div
       key={book.id}
-      className="card p-0 hover:shadow-lg transition-shadow cursor-pointer"
-      onClick={() => navigate(`/reading-room/books/${book.id}`)}
+      className={`card p-0 hover:shadow-lg transition-shadow cursor-pointer group ${selectedBookIds.has(book.id) ? 'ring-2 ring-[#FF1493]' : ''}`}
+      onClick={() => {
+        if (bookMenuOpenId === book.id) { setBookMenuOpenId(null); return }
+        if (bookBulkMode) toggleBookSelection(book.id)
+        else navigate(`/reading-room/books/${book.id}`)
+      }}
     >
-      {/* Book Cover - square aspect ratio */}
-      <div className="relative bg-gradient-to-br from-purple-600 to-purple-800 aspect-square flex items-center justify-center">
+      {/* Book Cover */}
+      <div className="relative bg-gradient-to-br from-purple-600 to-purple-800 aspect-[4/5] flex items-center justify-center">
         <img
           src={book.cover_art_url ? `/api/v1/books/${book.id}/cover-art` : S54.defaultBookCover}
           alt={book.title}
           loading="lazy"
           className="w-full h-full object-contain"
         />
+        {bookBulkMode && (
+          <div className="absolute top-2 left-2">
+            <input
+              type="checkbox"
+              checked={selectedBookIds.has(book.id)}
+              onChange={() => toggleBookSelection(book.id)}
+              className="w-5 h-5"
+              onClick={(e) => e.stopPropagation()}
+            />
+          </div>
+        )}
+        {/* Context menu button — only for books with co-authors */}
+        {!bookBulkMode && book.co_authors && book.co_authors.length > 0 && (
+          <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
+            <div className="relative">
+              <button
+                className="w-7 h-7 rounded-full bg-black/60 hover:bg-black/80 flex items-center justify-center text-white"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setBookMenuOpenId(bookMenuOpenId === book.id ? null : book.id)
+                }}
+                title="More options"
+              >
+                <FiMoreVertical className="w-3.5 h-3.5" />
+              </button>
+              {bookMenuOpenId === book.id && (
+                <div
+                  className="absolute right-0 top-8 bg-white dark:bg-[#161B22] border border-gray-200 dark:border-[#30363D] rounded-lg shadow-xl z-20 min-w-[160px]"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <button
+                    className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#1C2128] rounded-lg"
+                    onClick={() => {
+                      setBookForLeadModal(book)
+                      setBookMenuOpenId(null)
+                    }}
+                  >
+                    <FiStar className="w-4 h-4 text-[#FF1493]" />
+                    Set Lead Author
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Book Info */}
@@ -405,6 +547,9 @@ function ReadingRoom() {
         </h3>
         <p className="text-xs text-gray-500 dark:text-gray-400 truncate mt-1">
           {book.author_name}
+          {book.co_authors && book.co_authors.length > 0 && (
+            <span className="text-gray-400 dark:text-gray-500"> &amp; {book.co_authors.join(', ')}</span>
+          )}
         </p>
         <div className="flex items-center justify-between mt-1">
           <span className="text-xs text-gray-500 dark:text-gray-400">
@@ -438,6 +583,11 @@ function ReadingRoom() {
             {book.series_name}{book.series_position ? ` #${book.series_position}` : ''}
           </p>
         )}
+        {book.genre && (
+          <span className="inline-block mt-1 px-1.5 py-0.5 rounded text-[10px] bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300 truncate max-w-full">
+            {book.genre}
+          </span>
+        )}
       </div>
     </div>
   )
@@ -450,13 +600,21 @@ function ReadingRoom() {
       onClick={() => navigate(`/reading-room/series/${series.id}`)}
     >
       {/* Series Cover */}
-      <div className="relative bg-gradient-to-br from-teal-600 to-teal-800 aspect-square flex items-center justify-center">
+      <div className="relative bg-gradient-to-br from-teal-600 to-teal-800 aspect-[4/5] flex items-center justify-center">
         {series.cover_art_url ? (
           <img
             src={`/api/v1/series/${series.id}/cover-art`}
             alt={series.name}
             loading="lazy"
             className="w-full h-full object-contain"
+          />
+        ) : series.first_book_id ? (
+          <img
+            src={`/api/v1/books/${series.first_book_id}/cover-art`}
+            alt={series.name}
+            loading="lazy"
+            className="w-full h-full object-contain"
+            onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
           />
         ) : (
           <FiBook className="w-12 h-12 text-white/30" />
@@ -922,13 +1080,27 @@ function ReadingRoom() {
                   className="btn btn-secondary"
                   onClick={() => fetchAllMetadataMutation.mutate(false)}
                   disabled={fetchAllMetadataMutation.isPending || !!metadataRefreshState}
-                  title="Fetch author images, biographies and book cover art for the whole library"
+                  title="Fetch missing author images, biographies and book cover art (skips authors that already have data)"
                 >
                   {(fetchAllMetadataMutation.isPending || metadataRefreshState)
                     ? <FiLoader className="w-4 h-4 mr-2 animate-spin" />
                     : <FiDownload className="w-4 h-4 mr-2" />
                   }
                   {metadataRefreshState ? 'Fetching…' : 'Fetch Metadata'}
+                </button>
+              )}
+              {isDjOrAbove && (
+                <button
+                  className="btn btn-secondary"
+                  onClick={() => fetchAllMetadataMutation.mutate(true)}
+                  disabled={fetchAllMetadataMutation.isPending || !!metadataRefreshState}
+                  title="Re-fetch ALL author images, biographies and book cover art — overwrites existing data"
+                >
+                  {(fetchAllMetadataMutation.isPending || metadataRefreshState)
+                    ? <FiLoader className="w-4 h-4 mr-2 animate-spin" />
+                    : <FiRefreshCw className="w-4 h-4 mr-2" />
+                  }
+                  {metadataRefreshState ? 'Fetching…' : 'Force Refresh'}
                 </button>
               )}
               {isDjOrAbove && (
@@ -969,14 +1141,29 @@ function ReadingRoom() {
                       {isDjOrAbove && (
                         <button
                           className="w-full flex items-center px-4 py-2.5 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-[#1C2128] disabled:opacity-50"
-                          onClick={() => fetchAllMetadataMutation.mutate(false)}
+                          onClick={() => { fetchAllMetadataMutation.mutate(false); setActionsMenuOpen(false) }}
                           disabled={fetchAllMetadataMutation.isPending || !!metadataRefreshState}
+                          title="Fetch missing metadata only"
                         >
                           {(fetchAllMetadataMutation.isPending || metadataRefreshState)
                             ? <FiLoader className="w-4 h-4 mr-3 text-gray-500 animate-spin" />
                             : <FiDownload className="w-4 h-4 mr-3 text-gray-500" />
                           }
                           {metadataRefreshState ? 'Fetching…' : 'Fetch Metadata'}
+                        </button>
+                      )}
+                      {isDjOrAbove && (
+                        <button
+                          className="w-full flex items-center px-4 py-2.5 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-[#1C2128] disabled:opacity-50"
+                          onClick={() => { fetchAllMetadataMutation.mutate(true); setActionsMenuOpen(false) }}
+                          disabled={fetchAllMetadataMutation.isPending || !!metadataRefreshState}
+                          title="Re-fetch ALL metadata, overwriting existing data"
+                        >
+                          {(fetchAllMetadataMutation.isPending || metadataRefreshState)
+                            ? <FiLoader className="w-4 h-4 mr-3 text-gray-500 animate-spin" />
+                            : <FiRefreshCw className="w-4 h-4 mr-3 text-gray-500" />
+                          }
+                          {metadataRefreshState ? 'Fetching…' : 'Force Refresh'}
                         </button>
                       )}
                     </div>
@@ -1240,6 +1427,23 @@ function ReadingRoom() {
                   {bulkMode ? 'Cancel Selection' : 'Select Mode'}
                 </button>
               )}
+              {/* Bulk Mode for Books */}
+              {sortMode === 'book' && isDjOrAbove && (
+                <button
+                  className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                    bookBulkMode
+                      ? 'bg-orange-600 text-white hover:bg-orange-700'
+                      : 'bg-gray-200 dark:bg-[#0D1117] text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-[#30363D]'
+                  }`}
+                  onClick={() => {
+                    setBookBulkMode(!bookBulkMode)
+                    if (bookBulkMode) setSelectedBookIds(new Set())
+                  }}
+                  title={bookBulkMode ? 'Exit selection mode' : 'Enable bulk selection'}
+                >
+                  {bookBulkMode ? 'Cancel Selection' : 'Select Mode'}
+                </button>
+              )}
             </div>
 
             {/* Search */}
@@ -1270,29 +1474,39 @@ function ReadingRoom() {
             </div>
           </div>
 
-          {/* Bulk Actions Bar */}
+          {/* Bulk Actions Bar — Authors */}
           {bulkMode && selectedIds.size > 0 && sortMode === 'author' && (
             <div className="card p-4 bg-orange-50 dark:bg-orange-900/20 border-orange-200 dark:border-orange-800">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between gap-3 flex-wrap">
                 <span className="text-sm font-medium text-gray-900 dark:text-white">
                   {selectedIds.size} author{selectedIds.size !== 1 ? 's' : ''} selected
                 </span>
-                <div className="flex space-x-2">
+                <div className="flex flex-wrap gap-2">
+                  {selectedIds.size >= 2 && (
+                    <button
+                      className="btn btn-sm btn-primary flex items-center gap-1.5"
+                      onClick={() => setShowMergeAuthorsModal(true)}
+                      title="Merge selected authors into one"
+                    >
+                      <FiUserPlus className="w-3.5 h-3.5" />
+                      Merge Authors
+                    </button>
+                  )}
                   <button
-                    className="btn btn-sm btn-primary"
+                    className="btn btn-sm btn-secondary"
                     onClick={() => bulkUpdateMutation.mutate(true)}
                     disabled={bulkUpdateMutation.isPending}
                     title="Monitor all selected authors"
                   >
-                    Monitor Selected
+                    Monitor
                   </button>
                   <button
-                    className="btn btn-sm btn-secondary"
+                    className="btn btn-sm btn-ghost"
                     onClick={() => bulkUpdateMutation.mutate(false)}
                     disabled={bulkUpdateMutation.isPending}
                     title="Unmonitor all selected authors"
                   >
-                    Unmonitor Selected
+                    Unmonitor
                   </button>
                   {isDirector && (
                   <button
@@ -1304,7 +1518,7 @@ function ReadingRoom() {
                     disabled={bulkDeleteMutation.isPending}
                     title="Delete all selected authors"
                   >
-                    Delete Selected
+                    Delete
                   </button>
                   )}
                   <button
@@ -1313,6 +1527,34 @@ function ReadingRoom() {
                     title={selectedIds.size === items.length ? 'Deselect all' : 'Select all on this page'}
                   >
                     {selectedIds.size === items.length ? 'Deselect All' : 'Select All'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Bulk Actions Bar — Books */}
+          {bookBulkMode && selectedBookIds.size > 0 && sortMode === 'book' && (
+            <div className="card p-4 bg-orange-50 dark:bg-orange-900/20 border-orange-200 dark:border-orange-800">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-medium text-gray-900 dark:text-white">
+                  {selectedBookIds.size} book{selectedBookIds.size !== 1 ? 's' : ''} selected
+                </span>
+                <div className="flex space-x-2">
+                  <button
+                    className="btn btn-sm btn-primary flex items-center gap-1.5"
+                    onClick={() => setShowMoveToAuthorModal(true)}
+                    title="Move selected books to a different author"
+                  >
+                    <FiUserPlus className="w-3.5 h-3.5" />
+                    Move to Author
+                  </button>
+                  <button
+                    className="btn btn-sm btn-ghost"
+                    onClick={toggleSelectAllBooks}
+                    title={selectedBookIds.size === books.length ? 'Deselect all' : 'Select all on this page'}
+                  >
+                    {selectedBookIds.size === books.length ? 'Deselect All' : 'Select All'}
                   </button>
                 </div>
               </div>
@@ -1461,6 +1703,19 @@ function ReadingRoom() {
               >
                 <FiFileText className="w-4 h-4 mr-1" />
                 Export CSV
+              </button>
+              <button
+                className="btn btn-sm btn-primary flex items-center gap-1.5"
+                onClick={() => resolveUnlinkedMutation.mutate()}
+                disabled={resolveUnlinkedMutation.isPending}
+                title="Run all resolution phases (0–5) against unlinked audiobook files: create missing authors, MBID matching, AcoustID fingerprinting, metadata stubs"
+              >
+                {resolveUnlinkedMutation.isPending ? (
+                  <FiLoader className="w-4 h-4 animate-spin" />
+                ) : (
+                  <FiLink className="w-4 h-4" />
+                )}
+                Resolve All
               </button>
             </div>
           </div>
@@ -1937,6 +2192,38 @@ function ReadingRoom() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Move to Author Modal */}
+      {showMoveToAuthorModal && (
+        <MoveToAuthorModal
+          bookCount={selectedBookIds.size}
+          onClose={() => setShowMoveToAuthorModal(false)}
+          onConfirm={(opts) => bulkMoveToAuthorMutation.mutate(opts)}
+          isPending={bulkMoveToAuthorMutation.isPending}
+        />
+      )}
+
+      {/* Merge Authors Modal */}
+      {showMergeAuthorsModal && (
+        <MergeAuthorsModal
+          selectedAuthors={authors.filter((a: Author) => selectedIds.has(a.id))}
+          onClose={() => setShowMergeAuthorsModal(false)}
+          onConfirm={(sourceIds, targetId) => mergeAuthorsMutation.mutate({ sourceIds, targetId })}
+          isPending={mergeAuthorsMutation.isPending}
+        />
+      )}
+
+      {/* Set Lead Author Modal (from book card context menu) */}
+      {bookForLeadModal && (
+        <SetLeadAuthorModal
+          bookTitle={bookForLeadModal.title}
+          currentAuthorName={bookForLeadModal.author_name || ''}
+          coAuthors={bookForLeadModal.co_authors || []}
+          onClose={() => setBookForLeadModal(null)}
+          onConfirm={(leadName) => setLeadInRoomMutation.mutate({ bookId: bookForLeadModal.id, leadName })}
+          isPending={setLeadInRoomMutation.isPending}
+        />
       )}
 
       {/* Add Author Modal */}
