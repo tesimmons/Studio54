@@ -14,6 +14,14 @@ class OpenLibraryService:
     SEARCH_URL = "https://openlibrary.org/search.json"
     COVER_URL = "https://covers.openlibrary.org/b/id/{cover_id}-L.jpg"
 
+    # Subjects to skip — too generic to be useful as a genre label
+    _SKIP_SUBJECTS = {
+        'fiction', 'nonfiction', 'non-fiction', 'audiobook', 'audiobooks',
+        'large type books', 'large print', 'accessible book', 'open library',
+        'protected daisy', 'in library', 'readable', 'borrowable', 'overlay',
+        'overdrive', 'open syllabus project', 'internet archive',
+    }
+
     def __init__(self):
         self.session = requests.Session()
         self.session.headers.update({
@@ -85,6 +93,138 @@ class OpenLibraryService:
 
         except Exception as e:
             logger.warning(f"[OpenLibrary] Failed to fetch cover for '{title}': {e}")
+            return None
+
+
+    def fetch_book_genre(self, title: str, author_name: Optional[str] = None) -> Optional[str]:
+        """
+        Search OpenLibrary for a book and return its most specific subject as a genre string.
+
+        Uses the `subject` field from the search index (a list of subject strings
+        already cleaned and sorted by OpenLibrary). Returns the first meaningful
+        subject after filtering out generic/meta subjects.
+
+        Args:
+            title: Book title
+            author_name: Optional author name to narrow results
+
+        Returns:
+            Genre string (e.g. "Science Fiction", "Fantasy") or None
+        """
+        try:
+            params: dict = {
+                'title': title,
+                'fields': 'title,author_name,subject',
+                'limit': 5,
+            }
+            if author_name:
+                params['author'] = author_name
+
+            resp = self.session.get(self.SEARCH_URL, params=params, timeout=10)
+            resp.raise_for_status()
+            docs = resp.json().get('docs', [])
+
+            for doc in docs:
+                subjects = doc.get('subject') or []
+                for subj in subjects:
+                    normalized = subj.lower().strip()
+                    if normalized in self._SKIP_SUBJECTS:
+                        continue
+                    # Skip overly long / meta subjects
+                    if len(subj) > 60:
+                        continue
+                    logger.info(f"[OpenLibrary] Genre for '{title}': {subj}")
+                    return subj
+
+            # Retry with short title if no results
+            for sep in (' - ', ':'):
+                if sep in title:
+                    short = title.split(sep)[0].strip()
+                    result = self.fetch_book_genre(short, author_name)
+                    if result:
+                        return result
+                    break
+
+            return None
+
+        except Exception as e:
+            logger.warning(f"[OpenLibrary] Failed to fetch genre for '{title}': {e}")
+            return None
+
+
+    def fetch_book_description(self, title: str, author_name: Optional[str] = None) -> Optional[str]:
+        """
+        Search OpenLibrary for a book and return its description/synopsis.
+
+        Two-step: search.json to find the work key, then /works/{key}.json
+        to retrieve the description field (which may be a plain string or a
+        {"type": "/type/text", "value": "..."} dict).
+
+        Args:
+            title: Book title
+            author_name: Optional author name to narrow results
+
+        Returns:
+            Description string (up to ~2000 chars) or None
+        """
+        try:
+            params: dict = {
+                'title': title,
+                'fields': 'title,author_name,key',
+                'limit': 5,
+            }
+            if author_name:
+                params['author'] = author_name
+
+            resp = self.session.get(self.SEARCH_URL, params=params, timeout=10)
+            resp.raise_for_status()
+            docs = resp.json().get('docs', [])
+
+            work_key = None
+            for doc in docs:
+                work_key = doc.get('key')
+                if work_key:
+                    break
+
+            if not work_key:
+                # Retry with subtitle stripped
+                for sep in (' - ', ':'):
+                    if sep in title:
+                        short = title.split(sep)[0].strip()
+                        result = self.fetch_book_description(short, author_name)
+                        if result:
+                            return result
+                        break
+                return None
+
+            works_url = f"https://openlibrary.org{work_key}.json"
+            wresp = self.session.get(works_url, timeout=10)
+            wresp.raise_for_status()
+            works_data = wresp.json()
+
+            raw_desc = works_data.get('description')
+            if not raw_desc:
+                return None
+
+            # Description can be a plain string or {"type": ..., "value": "..."}
+            if isinstance(raw_desc, dict):
+                text = raw_desc.get('value') or ''
+            else:
+                text = str(raw_desc)
+
+            text = text.strip()
+            if not text:
+                return None
+
+            # Trim to a reasonable dust-jacket length
+            if len(text) > 2000:
+                text = text[:1997] + '...'
+
+            logger.info(f"[OpenLibrary] Description for '{title}': {len(text)} chars")
+            return text
+
+        except Exception as e:
+            logger.warning(f"[OpenLibrary] Failed to fetch description for '{title}': {e}")
             return None
 
 

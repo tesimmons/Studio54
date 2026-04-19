@@ -53,6 +53,12 @@ class BulkAuthorUpdateRequest(BaseModel):
     quality_profile_id: Optional[str] = None
 
 
+class MergeAuthorsRequest(BaseModel):
+    """Merge one or more source authors into a single target author."""
+    source_author_ids: List[str]   # authors whose books will be moved
+    target_author_id: str          # the lead author to keep
+
+
 @router.post("/authors")
 @rate_limit("50/minute")
 async def add_author(
@@ -444,6 +450,10 @@ async def get_author(
                 effective_image_url = b.cover_art_url
                 break
 
+    # Live counts — never rely on stale stored columns
+    live_book_count = len(books)
+    live_chapter_count = sum(real_chapter_counts.values())
+
     return {
         "id": str(author.id),
         "name": author.name,
@@ -455,8 +465,8 @@ async def get_author(
         "image_url": effective_image_url,
         "overview": author.overview,
         "genre": author.genre,
-        "book_count": author.book_count,
-        "chapter_count": author.chapter_count,
+        "book_count": live_book_count,
+        "chapter_count": live_chapter_count,
         "linked_files_count": linked_files_count,
         "added_at": author.added_at.isoformat() if author.added_at else None,
         "last_sync_at": author.last_sync_at.isoformat() if author.last_sync_at else None,
@@ -945,6 +955,102 @@ async def bulk_update_authors(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Bulk update failed: {str(e)}"
         )
+
+
+@router.post("/authors/merge")
+@rate_limit("10/minute")
+async def merge_authors(
+    request: Request,
+    body: MergeAuthorsRequest,
+    current_user: User = Depends(require_dj_or_above),
+    db: Session = Depends(get_db),
+):
+    """
+    Merge one or more source authors into a target (lead) author.
+
+    - Moves all books from each source author to the target author.
+    - Queues a rewrite_book_file_tags task for each moved book so that
+      audio file tags reflect the target author's name.
+    - Deletes the now-empty source authors from the database.
+    """
+    import uuid as uuid_lib
+    from app.tasks.sync_tasks import rewrite_book_file_tags
+    from app.models.job_state import JobType
+
+    if not body.source_author_ids:
+        raise HTTPException(status_code=400, detail="source_author_ids cannot be empty")
+
+    validate_uuid(body.target_author_id, "Target Author ID")
+    for sid in body.source_author_ids:
+        validate_uuid(sid, "Source Author ID")
+        if sid == body.target_author_id:
+            raise HTTPException(status_code=400, detail="Source and target author cannot be the same")
+
+    target = db.query(Author).filter(Author.id == uuid_lib.UUID(body.target_author_id)).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="Target author not found")
+
+    books_moved = 0
+    moved_book_ids: list[str] = []
+    tag_task_ids = []
+    merged_names = []
+
+    for sid in body.source_author_ids:
+        source = db.query(Author).filter(Author.id == uuid_lib.UUID(sid)).first()
+        if not source:
+            logger.warning(f"merge_authors: source {sid} not found, skipping")
+            continue
+
+        merged_names.append(source.name)
+
+        # Reassign all books from source → target
+        books = db.query(Book).filter(Book.author_id == source.id).all()
+        for book in books:
+            book.author_id = target.id
+            book.credit_name = None  # clear any name override so it inherits target's name
+            book.updated_at = datetime.now(timezone.utc)
+            books_moved += 1
+            moved_book_ids.append(str(book.id))
+
+        db.flush()  # make reassignment visible before deleting source
+
+        # Delete the now-empty source author
+        db.delete(source)
+
+    db.commit()
+
+    # Queue file tag rewrites only for the books that were actually moved
+    for book_id in moved_book_ids:
+        chapter_count = db.query(Chapter).filter(
+            Chapter.book_id == uuid_lib.UUID(book_id),
+            Chapter.has_file == True,
+            Chapter.file_path.isnot(None),
+        ).count()
+        if chapter_count > 0:
+            task = rewrite_book_file_tags.apply_async(
+                args=[book_id],
+                kwargs={
+                    "new_author": target.name,
+                    "job_type": JobType.METADATA_REFRESH,
+                    "entity_type": "book",
+                    "entity_id": book_id,
+                }
+            )
+            tag_task_ids.append(task.id)
+
+    logger.info(
+        f"Merged {len(body.source_author_ids)} author(s) → '{target.name}': "
+        f"{books_moved} books moved, {len(tag_task_ids)} tag rewrites queued"
+    )
+
+    return {
+        "success": True,
+        "target_author_id": str(target.id),
+        "target_author_name": target.name,
+        "merged_author_names": merged_names,
+        "books_moved": books_moved,
+        "tag_task_ids": tag_task_ids,
+    }
 
 
 @router.post("/authors/{author_id}/cover-art")

@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast, { Toaster } from 'react-hot-toast'
 import api, { notificationsApi, adminApi, settingsApi, authApi } from '../api/client'
+import ApiKeysSettings from '../components/ApiKeysSettings'
 import type { MusicBrainzSettings } from '../api/client'
 import { FiPlus, FiTrash2, FiCheck, FiX, FiAlertCircle, FiEdit, FiEye, FiEyeOff, FiBell, FiSend, FiUsers, FiShield, FiSettings, FiFileText, FiChevronLeft, FiFilter, FiDownload } from 'react-icons/fi'
 import type { NotificationProfile, AuthUser, UserRole } from '../types'
@@ -458,7 +459,7 @@ function LoggingTab({
 function Settings() {
   const queryClient = useQueryClient()
   const { user: currentUser } = useAuth()
-  const [activeTab, setActiveTab] = useState<'media-management' | 'storage' | 'notifications' | 'musicbrainz' | 'users' | 'system' | 'download-clients' | 'indexers' | 'quality-profiles' | 'logging'>('media-management')
+  const [activeTab, setActiveTab] = useState<'media-management' | 'storage' | 'notifications' | 'musicbrainz' | 'users' | 'system' | 'download-clients' | 'indexers' | 'quality-profiles' | 'logging' | 'api-keys'>('media-management')
 
   // System tab state
   const [keepPlaylists, setKeepPlaylists] = useState(false)
@@ -695,6 +696,7 @@ function Settings() {
             { key: 'download-clients' as const, label: 'Download Clients' },
             { key: 'indexers' as const, label: 'Indexers' },
             { key: 'quality-profiles' as const, label: 'Quality Profiles' },
+            { key: 'api-keys' as const, label: 'API Keys' },
             { key: 'logging' as const, label: 'Logging' },
           ]).map(({ key, label }) => (
             <button
@@ -1089,6 +1091,7 @@ function Settings() {
             ) : (
               <div className="text-red-500">Failed to load MusicBrainz settings</div>
             )}
+
           </div>
         )}
 
@@ -1361,6 +1364,9 @@ function Settings() {
             <SchedulerSettings />
           </div>
         )}
+        {/* API Keys Tab */}
+        {activeTab === 'api-keys' && <ApiKeysSettings />}
+
         {/* Logging Tab */}
         {activeTab === 'logging' && (
           <LoggingTab

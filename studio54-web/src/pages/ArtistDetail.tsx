@@ -538,8 +538,8 @@ function ArtistDetail() {
             className="card p-0 hover:shadow-lg transition-shadow cursor-pointer group"
             onClick={() => navigate(`/disco-lounge/albums/${album.id}`)}
           >
-            {/* Album Cover - square aspect ratio, centered, no crop */}
-            <div className="relative aspect-square bg-gradient-to-br from-gray-600 to-gray-800 flex items-center justify-center">
+            {/* Album Cover */}
+            <div className="relative aspect-[4/5] bg-gradient-to-br from-gray-600 to-gray-800 flex items-center justify-center">
               <img
                 src={album.cover_art_url || S54.defaultAlbumArt}
                 alt={album.title}

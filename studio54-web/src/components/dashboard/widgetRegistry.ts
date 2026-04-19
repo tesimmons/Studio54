@@ -9,6 +9,10 @@ import ActiveDownloadsWidget from './widgets/ActiveDownloadsWidget'
 import RecentWantedWidget from './widgets/RecentWantedWidget'
 import JobsWidget from './widgets/JobsWidget'
 import SectionHeaderWidget from './widgets/SectionHeaderWidget'
+import SystemActivityGraphWidget from './widgets/SystemActivityGraphWidget'
+import NetworkCheckWidget from './widgets/NetworkCheckWidget'
+import StorageDiskWidget from './widgets/StorageDiskWidget'
+import JobActivityWidget from './widgets/JobActivityWidget'
 
 export const WIDGET_REGISTRY: WidgetDefinition[] = [
   // Section headers
@@ -23,8 +27,8 @@ export const WIDGET_REGISTRY: WidgetDefinition[] = [
   { id: 'downloaded', label: 'Downloaded', category: 'stats', defaultSize: { w: 3, h: 2 }, minSize: { w: 1, h: 1 }, libraryType: 'music', component: StatCardWidget },
   { id: 'tracks', label: 'Tracks', category: 'stats', defaultSize: { w: 3, h: 2 }, minSize: { w: 1, h: 1 }, libraryType: 'music', component: StatCardWidget },
 
-  // Shared stats cards (no libraryType)
-  { id: 'library-size', label: 'Library Size', category: 'stats', defaultSize: { w: 3, h: 2 }, minSize: { w: 1, h: 1 }, component: StatCardWidget },
+  // Shared stats cards (no libraryType) — configurable: supports multiple instances
+  { id: 'library-size', label: 'Library Size', category: 'stats', defaultSize: { w: 3, h: 2 }, minSize: { w: 1, h: 1 }, configurable: true, component: StatCardWidget },
 
   // Audiobook stats cards
   { id: 'total-authors', label: 'Total Authors', category: 'stats', defaultSize: { w: 3, h: 2 }, minSize: { w: 1, h: 1 }, libraryType: 'audiobook', component: StatCardWidget },
@@ -33,6 +37,10 @@ export const WIDGET_REGISTRY: WidgetDefinition[] = [
   // System (director only)
   { id: 'system-disk', label: 'System Disk', category: 'system', defaultSize: { w: 3, h: 2 }, minSize: { w: 1, h: 1 }, requiredRole: 'director', component: DiskWidget },
   { id: 'storage-disk', label: 'Storage Disk', category: 'system', defaultSize: { w: 3, h: 2 }, minSize: { w: 1, h: 1 }, requiredRole: 'director', component: DiskWidget },
+  { id: 'system-activity-graph', label: 'System Activity (CPU / Memory / Network)', category: 'system', defaultSize: { w: 4, h: 8 }, minSize: { w: 3, h: 6 }, requiredRole: 'director', component: SystemActivityGraphWidget },
+  { id: 'network-check', label: 'Network Check', category: 'system', defaultSize: { w: 3, h: 4 }, minSize: { w: 2, h: 3 }, requiredRole: 'director', configurable: true, component: NetworkCheckWidget },
+  { id: 'storage-monitor', label: 'Storage Monitor', category: 'system', defaultSize: { w: 3, h: 3 }, minSize: { w: 2, h: 2 }, requiredRole: 'director', configurable: true, component: StorageDiskWidget },
+  { id: 'job-activity-7d', label: 'Job Activity (7 Days)', category: 'lists', defaultSize: { w: 4, h: 4 }, minSize: { w: 2, h: 3 }, component: JobActivityWidget },
 
   // Music charts
   { id: 'album-status', label: 'Album Status', category: 'charts', defaultSize: { w: 6, h: 4 }, minSize: { w: 1, h: 1 }, libraryType: 'music', component: AlbumStatusWidget },
@@ -47,6 +55,24 @@ export const WIDGET_REGISTRY: WidgetDefinition[] = [
 ]
 
 export const WIDGET_MAP = new Map(WIDGET_REGISTRY.map(w => [w.id, w]))
+
+/**
+ * Resolve a layout item id to its base widget type.
+ * Configurable widgets use instance ids like "library-size__1745001234567".
+ * This strips the "__<suffix>" to find the registry entry.
+ */
+export function resolveWidgetId(instanceId: string): string {
+  const idx = instanceId.indexOf('__')
+  return idx !== -1 ? instanceId.slice(0, idx) : instanceId
+}
+
+/** Look up a widget definition, handling configurable instance ids. */
+export function getWidgetDef(instanceId: string) {
+  return WIDGET_MAP.get(resolveWidgetId(instanceId))
+}
+
+/** Configurable widget types that can be added as multiple instances. */
+export const CONFIGURABLE_WIDGETS = WIDGET_REGISTRY.filter(w => w.configurable)
 
 export const CATEGORY_LABELS: Record<WidgetCategory, string> = {
   stats: 'Statistics',
@@ -80,4 +106,5 @@ export const DEFAULT_LAYOUT: DashboardLayoutItem[] = [
   { i: 'section-system', x: 0, y: 24, w: 12, h: 1, minW: 12, minH: 1 },
   { i: 'system-disk', x: 0, y: 25, w: 4, h: 2, minW: 1, minH: 1 },
   { i: 'storage-disk', x: 4, y: 25, w: 4, h: 2, minW: 1, minH: 1 },
+  { i: 'system-activity-graph', x: 0, y: 27, w: 4, h: 8, minW: 3, minH: 6 },
 ]

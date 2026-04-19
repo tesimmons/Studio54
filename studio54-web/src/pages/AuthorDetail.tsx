@@ -51,8 +51,10 @@ import {
   FiMinus,
   FiPlus,
   FiExternalLink,
+  FiUserPlus,
 } from 'react-icons/fi'
 import { S54 } from '../assets/graphics'
+import MoveToAuthorModal from '../components/MoveToAuthorModal'
 
 interface BookItem {
   id: string
@@ -180,6 +182,7 @@ function AuthorDetail() {
   // Bulk selection state for books
   const [bulkBookMode, setBulkBookMode] = useState(false)
   const [selectedBookIds, setSelectedBookIds] = useState<Set<string>>(new Set())
+  const [showMoveToAuthorModal, setShowMoveToAuthorModal] = useState(false)
 
   // Toast notification state
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null)
@@ -392,22 +395,25 @@ function AuthorDetail() {
     onSuccess: (data) => {
       showToast(`Metadata refresh started for ${data.author_name || author?.name}`, 'info')
       setMetadataRefreshResult(null)
-      // Poll for the job that was just started
+      // Poll until the job appears in the DB (Celery may queue it with a short delay)
+      let attempts = 0
       const findJob = async () => {
+        attempts++
         try {
-          const result = await jobsApi.list({ entity_id: id!, job_type: 'metadata_refresh', limit: 5 })
+          const result = await jobsApi.list({ entity_id: id!, job_type: 'metadata_refresh', limit: 10 })
           const jobs = result.jobs || []
-          const running = jobs.find((j: Job) => j.status === 'running' || j.status === 'pending')
-          if (running) {
-            setMetadataRefreshJobId(running.id)
-          } else if (data.task_id) {
-            // fallback: find by celery task id
-            const any = jobs.find((j: Job) => j.celery_task_id === data.task_id)
-            if (any) setMetadataRefreshJobId(any.id)
+          // Prefer running/pending; fallback to any job matching the celery task id
+          const active = jobs.find((j: Job) => j.status === 'running' || j.status === 'pending')
+          if (active) { setMetadataRefreshJobId(active.id); return }
+          if (data.task_id) {
+            const byTask = jobs.find((j: Job) => j.celery_task_id === data.task_id)
+            if (byTask) { setMetadataRefreshJobId(byTask.id); return }
           }
         } catch { /* ignore */ }
+        // Retry up to 8 times (covers ~12 seconds total)
+        if (attempts < 8) setTimeout(findJob, 1500)
       }
-      setTimeout(findJob, 1500)
+      setTimeout(findJob, 800)
     },
     onError: (error: Error) => {
       showToast(`Failed to refresh metadata: ${error.message}`, 'error')
@@ -701,6 +707,25 @@ function AuthorDetail() {
     onError: (error: Error) => {
       showToast(`Bulk delete failed: ${error.message}`, 'error')
     }
+  })
+
+  // Bulk move books mutation
+  const bulkMoveToAuthorMutation = useMutation({
+    mutationFn: (opts: { authorId?: string; newAuthorName?: string; coAuthorName?: string }) =>
+      booksApi.bulkMoveToAuthor(Array.from(selectedBookIds), opts),
+    onSuccess: (data) => {
+      const msg = data.stub_created
+        ? `Moved ${data.moved_count} book${data.moved_count !== 1 ? 's' : ''} to new author "${data.author_name}" — metadata fetch queued`
+        : `Moved ${data.moved_count} book${data.moved_count !== 1 ? 's' : ''} to "${data.author_name}" — file tags updating`
+      showToast(msg, 'success')
+      setSelectedBookIds(new Set())
+      setBulkBookMode(false)
+      setShowMoveToAuthorModal(false)
+      queryClient.invalidateQueries({ queryKey: ['author', id] })
+    },
+    onError: (err: any) => {
+      showToast(err?.response?.data?.detail || 'Failed to move books', 'error')
+    },
   })
 
   const toggleBookSelection = useCallback((bookId: string) => {
@@ -1803,20 +1828,28 @@ function AuthorDetail() {
             </span>
             <div className="flex space-x-2">
               <button
-                className="btn btn-sm btn-primary"
+                className="btn btn-sm btn-primary flex items-center gap-1.5"
+                onClick={() => setShowMoveToAuthorModal(true)}
+                title="Move selected books to a different author"
+              >
+                <FiUserPlus className="w-3.5 h-3.5" />
+                Move to Author
+              </button>
+              <button
+                className="btn btn-sm btn-secondary"
                 onClick={() => bulkUpdateBooksMutation.mutate(true)}
                 disabled={bulkUpdateBooksMutation.isPending}
                 title="Monitor all selected books"
               >
-                Monitor Selected
+                Monitor
               </button>
               <button
-                className="btn btn-sm btn-secondary"
+                className="btn btn-sm btn-ghost"
                 onClick={() => bulkUpdateBooksMutation.mutate(false)}
                 disabled={bulkUpdateBooksMutation.isPending}
                 title="Unmonitor all selected books"
               >
-                Unmonitor Selected
+                Unmonitor
               </button>
               <button
                 className="btn btn-sm btn-danger"
@@ -1828,7 +1861,7 @@ function AuthorDetail() {
                 disabled={bulkDeleteBooksMutation.isPending}
                 title="Delete all selected books"
               >
-                Delete Selected
+                Delete
               </button>
               <button
                 className="btn btn-sm btn-ghost"
@@ -2429,6 +2462,16 @@ function AuthorDetail() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Move to Author Modal */}
+      {showMoveToAuthorModal && (
+        <MoveToAuthorModal
+          bookCount={selectedBookIds.size}
+          onClose={() => setShowMoveToAuthorModal(false)}
+          onConfirm={(opts) => bulkMoveToAuthorMutation.mutate(opts)}
+          isPending={bulkMoveToAuthorMutation.isPending}
+        />
       )}
     </div>
   )

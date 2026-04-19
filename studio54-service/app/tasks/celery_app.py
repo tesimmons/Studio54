@@ -183,6 +183,12 @@ celery_app.conf.update(
             "args": [120],  # retention_days
             "options": {"expires": 82800},
         },
+        # Verify downloaded files exist on disk daily
+        "verify-downloaded-files": {
+            "task": "app.tasks.download_tasks.verify_downloaded_files",
+            "schedule": 86400.0,  # 24 hours
+            "options": {"expires": 82800, "queue": "downloads"},
+        },
         # Worker autoscale check every 60 seconds
         "check-worker-autoscale": {
             "task": "app.tasks.monitoring_tasks.check_worker_autoscale",
@@ -311,8 +317,10 @@ def on_worker_ready(**kwargs):
                 recovered += 1
 
             # ── 3. Recover orphaned FileOrganizationJobs ──
+            # Include PENDING: a job queued while the worker was down stays PENDING
+            # forever because the Celery message is lost on restart.
             orphaned_file_jobs = db.query(FileOrganizationJob).filter(
-                FileOrganizationJob.status == FileOrgJobStatus.RUNNING
+                FileOrganizationJob.status.in_([FileOrgJobStatus.RUNNING, FileOrgJobStatus.PENDING])
             ).all()
 
             for job in orphaned_file_jobs:

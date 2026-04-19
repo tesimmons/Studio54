@@ -54,6 +54,9 @@ class Artist(Base):
     muse_library_id = Column(UUID(as_uuid=True), nullable=True)  # External reference to MUSE library
     studio54_library_path_id = Column(UUID(as_uuid=True), ForeignKey("library_paths.id"), nullable=True)
 
+    # Stub flag — True for synthetic records created from metadata when no MB match exists
+    is_stub = Column(Boolean, nullable=False, default=False, server_default='false')
+
     # Rating (1-5 stars manual override, null = use computed average)
     rating_override = Column(Integer, nullable=True)
 

@@ -56,6 +56,13 @@ class Book(Base):
 
     # Display metadata
     credit_name = Column(Text, nullable=True)  # Full artist credit string (e.g. "David Weber & Timothy Zahn")
+    co_authors = Column(Text, nullable=True)   # JSON array of co-author name strings, e.g. '["Jane Doe", "John Smith"]'
+
+    # Genre (from OpenLibrary subjects or Hardcover)
+    genre = Column(String(255), nullable=True)
+
+    # Synopsis / dust-jacket description (from Hardcover or OpenLibrary)
+    description = Column(Text, nullable=True)
 
     # Media
     cover_art_url = Column(Text, nullable=True)

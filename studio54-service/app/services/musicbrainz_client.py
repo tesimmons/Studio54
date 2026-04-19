@@ -455,14 +455,17 @@ class MusicBrainzClient:
         if not releases:
             return None
 
+        # All releases in the same RG share its secondary types — extract once
+        rg_secondary_types = [st.lower() for st in (rg.get("secondary-types") or [])]
+
         def score_release(rel):
             score = 0
 
-            # Status preference
+            # 1. Status preference (Official beats Promotion beats Bootleg)
             status_scores = {"Official": 100, "Promotion": 50, "Bootleg": 10}
             score += status_scores.get(rel.get("status"), 0)
 
-            # Country preference
+            # 2. Country preference
             country = rel.get("country")
             if country and preferred_countries:
                 try:
@@ -471,10 +474,27 @@ class MusicBrainzClient:
                 except ValueError:
                     pass
 
-            # Track count (more is better)
+            # 3. Track count (more complete = better)
             media = rel.get("media", [])
-            track_count = sum(m.get("track-count", 0) for m in media)
-            score += track_count
+            score += sum(m.get("track-count", 0) for m in media)
+
+            # 4. Secondary-type penalty — strongly prefer original studio releases
+            SECONDARY_PENALTIES = {
+                "compilation": -200, "live": -150, "remix": -180,
+                "mixtape/street": -180, "dj-mix": -180,
+                "demo": -100, "interview": -100, "spokenword": -100,
+            }
+            for st in rg_secondary_types:
+                score += SECONDARY_PENALTIES.get(st, 0)
+
+            # 5. Release-date bonus — earlier release is more likely the original
+            #    Max +50 for 1970; graduates down to 0 for 2020+
+            date_str = rel.get("date", "")
+            if date_str:
+                try:
+                    score += max(0, 50 - max(0, int(date_str[:4]) - 1970))
+                except (ValueError, IndexError):
+                    pass
 
             return score
 

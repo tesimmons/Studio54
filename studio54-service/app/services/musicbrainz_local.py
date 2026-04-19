@@ -396,14 +396,19 @@ class MusicBrainzLocalDB:
                 rc.date_day,
                 iso.code AS country,
                 rg.gid::text AS release_group_id,
-                (SELECT SUM(m.track_count) FROM musicbrainz.medium m WHERE m.release = r.id) AS total_tracks
+                (SELECT SUM(m.track_count) FROM musicbrainz.medium m WHERE m.release = r.id) AS total_tracks,
+                array_agg(DISTINCT rgst.name) FILTER (WHERE rgst.name IS NOT NULL) AS secondary_types
             FROM musicbrainz.release r
             JOIN musicbrainz.release_group rg ON r.release_group = rg.id
             LEFT JOIN musicbrainz.release_status rs ON r.status = rs.id
             LEFT JOIN musicbrainz.release_country rc ON r.id = rc.release
             LEFT JOIN musicbrainz.country_area ca ON rc.country = ca.area
             LEFT JOIN musicbrainz.iso_3166_1 iso ON ca.area = iso.area
+            LEFT JOIN musicbrainz.release_group_secondary_type_join rgstj ON rg.id = rgstj.release_group
+            LEFT JOIN musicbrainz.release_group_secondary_type rgst ON rgstj.secondary_type = rgst.id
             WHERE rg.gid = CAST(:mbid AS uuid)
+            GROUP BY r.id, r.gid, r.name, rs.name, rc.date_year, rc.date_month,
+                     rc.date_day, iso.code, rg.gid, rg.id
             ORDER BY
                 CASE rs.name
                     WHEN 'Official' THEN 0
@@ -420,11 +425,16 @@ class MusicBrainzLocalDB:
         if not rows:
             return None
 
-        # Score releases
+        # Score releases — prefer original studio releases over remixes/compilations
+        SECONDARY_PENALTIES = {
+            "compilation": -200, "live": -150, "remix": -180,
+            "mixtape/street": -180, "dj-mix": -180,
+            "demo": -100, "interview": -100, "spokenword": -100,
+        }
+
         def score_release(row):
             score = 0
-            status_scores = {"Official": 100, "Promotion": 50, "Bootleg": 10}
-            score += status_scores.get(row["status"] or "", 0)
+            score += {"Official": 100, "Promotion": 50, "Bootleg": 10}.get(row["status"] or "", 0)
 
             country = row["country"]
             if country and preferred_countries:
@@ -435,6 +445,15 @@ class MusicBrainzLocalDB:
                     pass
 
             score += (row["total_tracks"] or 0)
+
+            # Secondary-type penalty
+            for st in [s.lower() for s in (row["secondary_types"] or [])]:
+                score += SECONDARY_PENALTIES.get(st, 0)
+
+            # Release-date bonus — earlier release more likely original (max +50)
+            if row["date_year"]:
+                score += max(0, 50 - max(0, row["date_year"] - 1970))
+
             return score
 
         best = max(rows, key=score_release)

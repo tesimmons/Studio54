@@ -4,6 +4,7 @@ Integrates Lidarr-style file organization with quality detection and naming temp
 """
 
 import os
+import re
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 import logging
@@ -68,6 +69,12 @@ class EnhancedImportService:
     def _reload_config(self):
         """Reload configuration from database."""
         self.config = self._get_config()
+
+    @staticmethod
+    def _extract_track_number(stem: str) -> Optional[int]:
+        """Extract leading track number from a filename stem, e.g. '01 - Title' → 1."""
+        m = re.match(r'^(\d{1,3})[.\-_ ]', stem)
+        return int(m.group(1)) if m else None
 
     def build_album_path(
         self,
@@ -279,12 +286,18 @@ class EnhancedImportService:
                         })
                         continue
 
-                    # Try to match file to track (simplified - could be enhanced with metadata matching)
-                    # For now, just use first available track or create generic path
-                    if album.tracks:
-                        track = album.tracks[0]  # Simplified - should match by metadata
-                    else:
-                        track = None
+                    # Match source file to track by extracting track number from filename
+                    track_num = self._extract_track_number(source_file.stem)
+                    track = None
+                    if track_num and album.tracks:
+                        track = next(
+                            (t for t in album.tracks if t.track_number == track_num),
+                            None
+                        )
+                    if track is None and album.tracks:
+                        # Fall back to any track only if rename_tracks is disabled
+                        if not self.config.rename_tracks:
+                            track = album.tracks[0]
 
                     # Build destination path
                     if track and self.config.rename_tracks:
@@ -336,12 +349,15 @@ class EnhancedImportService:
                     )
 
                     if import_result.success:
+                        dest_absolute = Path(self.config.music_library_path) / dest_relative
                         logger.info(
-                            f"[Enhanced Import] Successfully imported: {source_file.name} -> {dest_relative}"
+                            f"[Enhanced Import] Successfully imported: {source_file.name} -> {dest_absolute}"
                         )
                         results['imported_files'].append({
                             'source': source_file.name,
-                            'destination': str(dest_relative),
+                            'destination': str(dest_absolute),
+                            'track_id': str(track.id) if track else None,
+                            'track_number': track_num,
                             'quality': quality_info,
                             'operation': operation.value,
                         })

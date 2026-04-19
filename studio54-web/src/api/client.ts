@@ -485,6 +485,15 @@ export const albumsApi = {
   },
 
   // Verify album in MUSE
+  verifyAndReset: async (): Promise<{
+    albums_checked: number
+    albums_reset: number
+    tracks_cleared: number
+  }> => {
+    const { data } = await api.post('/albums/verify-and-reset')
+    return data
+  },
+
   verifyMuse: async (albumId: string, updateStatus = true): Promise<{
     exists_in_muse: boolean
     file_count: number
@@ -1264,6 +1273,19 @@ export const jobsApi = {
     return data
   },
 
+  forceClearActive: async (): Promise<{
+    job_state_cancelled: number
+    file_org_cancelled: number
+    scan_job_cancelled: number
+    import_job_cancelled: number
+    total_cancelled: number
+    verified_clear: boolean
+    remaining_active: number
+  }> => {
+    const { data } = await api.post('/jobs/force-clear-active')
+    return data
+  },
+
   // Get log content for a job
   getLogContent: async (jobId: string, params?: {
     lines?: number
@@ -1933,6 +1955,55 @@ export const adminApi = {
     const { data } = await api.get('/admin/system/stats')
     return data
   },
+
+  // ICMP ping check for a given host
+  pingHost: async (host: string, count = 4): Promise<NetworkPingResult> => {
+    const { data } = await api.get('/admin/network/ping', { params: { host, count } })
+    return data
+  },
+
+  // Disk usage for a given mount point
+  getDiskUsage: async (path: string): Promise<DiskUsageResult> => {
+    const { data } = await api.get('/admin/disk/usage', { params: { path } })
+    return data
+  },
+
+  // Job activity summary for last N days
+  getJobActivitySummary: async (days = 7): Promise<JobActivitySummary> => {
+    const { data } = await api.get('/admin/jobs/activity-summary', { params: { days } })
+    return data
+  },
+}
+
+export interface NetworkPingResult {
+  host: string
+  reachable: boolean
+  packet_loss_percent: number
+  rtt_min_ms: number | null
+  rtt_avg_ms: number | null
+  rtt_max_ms: number | null
+  packets_sent: number
+  packets_received: number
+  error: string | null
+}
+
+export interface DiskUsageResult {
+  path: string
+  total_bytes: number
+  used_bytes: number
+  free_bytes: number
+  percent: number
+  total_human: string
+  used_human: string
+  free_human: string
+}
+
+export interface JobActivitySummary {
+  days: number
+  total: number
+  completed: number
+  failed: number
+  running: number
 }
 
 // ==================== QUEUE STATUS ====================
@@ -2025,6 +2096,64 @@ export const settingsApi = {
 
   updateAlbumTypeFilters: async (types: string[]): Promise<{ enabled_types: string[] }> => {
     const { data } = await api.put('/settings/album-type-filters', { enabled_types: types })
+    return data
+  },
+
+  getHardcover: async (): Promise<{ configured: boolean; key_preview?: string }> => {
+    const { data } = await api.get('/settings/hardcover')
+    return data
+  },
+
+  updateHardcover: async (api_key: string): Promise<{ configured: boolean; key_preview?: string }> => {
+    const { data } = await api.put('/settings/hardcover', { api_key })
+    return data
+  },
+
+  deleteHardcover: async (): Promise<{ configured: boolean }> => {
+    const { data } = await api.delete('/settings/hardcover')
+    return data
+  },
+}
+
+// ==================== API KEYS ====================
+
+export interface ApiKeyStatus {
+  id: string
+  label: string
+  description: string
+  docs_url: string
+  configured: boolean
+  key_preview?: string
+  expiry_days?: number | null        // null = no expiry tracking
+  installed_at?: string | null       // YYYY-MM-DD
+  expires_at?: string | null         // YYYY-MM-DD
+  days_until_expiry?: number | null  // negative = already expired
+}
+
+export interface ApiKeyTestResult {
+  success: boolean
+  message: string
+}
+
+export const apiKeysApi = {
+  list: async (): Promise<ApiKeyStatus[]> => {
+    const { data } = await api.get('/settings/api-keys')
+    return data
+  },
+  save: async (keyId: string, value: string): Promise<ApiKeyStatus> => {
+    const { data } = await api.put(`/settings/api-keys/${keyId}`, { value })
+    return data
+  },
+  remove: async (keyId: string): Promise<ApiKeyStatus> => {
+    const { data } = await api.delete(`/settings/api-keys/${keyId}`)
+    return data
+  },
+  test: async (keyId: string): Promise<ApiKeyTestResult> => {
+    const { data } = await api.post(`/settings/api-keys/${keyId}/test`)
+    return data
+  },
+  updateInstalledAt: async (keyId: string, installedAt: string): Promise<ApiKeyStatus> => {
+    const { data } = await api.patch(`/settings/api-keys/${keyId}/installed-at`, { installed_at: installedAt })
     return data
   },
 }
@@ -2356,6 +2485,25 @@ export const authorsApi = {
     return data
   },
 
+  // Merge multiple source authors into one target author
+  merge: async (
+    sourceAuthorIds: string[],
+    targetAuthorId: string
+  ): Promise<{
+    success: boolean
+    target_author_id: string
+    target_author_name: string
+    merged_author_names: string[]
+    books_moved: number
+    tag_task_ids: string[]
+  }> => {
+    const { data } = await api.post('/authors/merge', {
+      source_author_ids: sourceAuthorIds,
+      target_author_id: targetAuthorId,
+    })
+    return data
+  },
+
   uploadCoverArt: async (authorId: string, file: File): Promise<{ success: boolean; image_url: string }> => {
     const formData = new FormData()
     formData.append('file', file)
@@ -2525,6 +2673,28 @@ export const booksApi = {
     return data
   },
 
+  // Bulk move books to a different author
+  bulkMoveToAuthor: async (
+    bookIds: string[],
+    opts: { authorId?: string; newAuthorName?: string; coAuthorName?: string }
+  ): Promise<{
+    success: boolean
+    moved_count: number
+    author_id: string
+    author_name: string
+    stub_created: boolean
+    tag_task_ids: string[]
+    metadata_task_id: string | null
+  }> => {
+    const { data } = await api.post('/books/bulk-move-author', {
+      book_ids: bookIds,
+      author_id: opts.authorId ?? null,
+      new_author_name: opts.newAuthorName ?? null,
+      co_author_name: opts.coAuthorName ?? null,
+    })
+    return data
+  },
+
   // Monitor all books by author
   monitorByAuthor: async (authorId: string, monitored: boolean): Promise<{ updated_count: number }> => {
     const { data } = await api.post('/books/monitor-by-author', {
@@ -2554,11 +2724,42 @@ export const booksApi = {
     return data
   },
 
-  editMetadata: async (bookId: string, payload: { title?: string; author_name?: string }): Promise<{
+  setLeadAuthor: async (bookId: string, leadName: string): Promise<{
+    success: boolean
+    book_id: string
+    lead_author: string
+    co_authors: string[]
+    reassigned: boolean
+    chapters_to_update: number
+    task_id: string | null
+  }> => {
+    const { data } = await api.post(`/books/${bookId}/set-lead-author`, { lead_name: leadName })
+    return data
+  },
+
+  refreshMetadata: async (bookId: string): Promise<{
+    success: boolean
+    book_id: string
+    title: string
+    updated_fields: string[]
+    description: string | null
+    genre: string | null
+  }> => {
+    const { data } = await api.post(`/books/${bookId}/refresh-metadata`)
+    return data
+  },
+
+  editMetadata: async (bookId: string, payload: {
+    title?: string
+    author_name?: string
+    author_id?: string
+    co_authors?: string[]
+  }): Promise<{
     success: boolean
     book_id: string
     title: string
     credit_name: string | null
+    co_authors: string[]
     chapters_to_update: number
     task_id: string
   }> => {

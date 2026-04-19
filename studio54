@@ -167,8 +167,11 @@ cmd_start() {
         log_header "Starting Studio54"
         # shellcheck disable=SC1090
         [[ -f "$ENV_FILE" ]] && source "$ENV_FILE" 2>/dev/null || true
-        # In standalone mode, ensure the dozzle profile is active if not explicitly set
-        if [[ -z "${STUDIO54_MANAGED_BY:-}" && -z "${COMPOSE_PROFILES:-}" ]]; then
+        if [[ -n "${STUDIO54_MANAGED_BY:-}" ]]; then
+            # Managed mode — MasterControl provides its own Dozzle/Watchtower; suppress all profiles
+            COMPOSE_PROFILES= dc up -d
+        elif [[ -z "${COMPOSE_PROFILES:-}" ]]; then
+            # Standalone mode, no profiles set — auto-enable Dozzle
             log_info "Standalone mode — enabling Dozzle (log viewer)"
             COMPOSE_PROFILES=dozzle dc up -d
         else

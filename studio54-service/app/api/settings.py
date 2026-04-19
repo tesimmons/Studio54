@@ -347,3 +347,82 @@ def update_album_type_filters(update: AlbumTypeFiltersUpdate):
     except Exception as e:
         logger.error(f"Failed to save album type filters: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Hardcover API Key Settings ---
+
+HARDCOVER_API_KEY_REDIS_KEY = "studio54:settings:hardcover_api_key"
+
+
+class HardcoverSettingsResponse(BaseModel):
+    configured: bool
+    key_preview: Optional[str] = None  # e.g. "hc_••••••••abcd" — never returns the full key
+
+
+class HardcoverApiKeyUpdate(BaseModel):
+    api_key: str
+
+
+@router.get("/settings/hardcover", response_model=HardcoverSettingsResponse)
+def get_hardcover_settings(current_user: User = Depends(require_director)):
+    """Get Hardcover API key status (does not return the full key)."""
+    import os
+    key = None
+    try:
+        r = _get_redis()
+        key = r.get(HARDCOVER_API_KEY_REDIS_KEY)
+    except Exception:
+        pass
+    if not key:
+        key = os.getenv("HARDCOVER_API_KEY")
+
+    if not key:
+        return HardcoverSettingsResponse(configured=False)
+
+    # Return last 4 chars only
+    preview = f"{'•' * max(0, len(key) - 4)}{key[-4:]}" if len(key) >= 4 else "••••"
+    return HardcoverSettingsResponse(configured=True, key_preview=preview)
+
+
+@router.put("/settings/hardcover")
+def update_hardcover_settings(
+    body: HardcoverApiKeyUpdate,
+    current_user: User = Depends(require_director),
+):
+    """Save (or update) the Hardcover API key in Redis."""
+    key = body.api_key.strip()
+    if not key:
+        raise HTTPException(status_code=400, detail="api_key must not be empty")
+    try:
+        r = _get_redis()
+        r.set(HARDCOVER_API_KEY_REDIS_KEY, key)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    # Reset the singleton so next call picks up the new key
+    try:
+        from app.services.hardcover import reset_hardcover_service
+        reset_hardcover_service()
+    except Exception:
+        pass
+
+    preview = f"{'•' * max(0, len(key) - 4)}{key[-4:]}"
+    return HardcoverSettingsResponse(configured=True, key_preview=preview)
+
+
+@router.delete("/settings/hardcover")
+def delete_hardcover_settings(current_user: User = Depends(require_director)):
+    """Remove the Hardcover API key from Redis."""
+    try:
+        r = _get_redis()
+        r.delete(HARDCOVER_API_KEY_REDIS_KEY)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    try:
+        from app.services.hardcover import reset_hardcover_service
+        reset_hardcover_service()
+    except Exception:
+        pass
+
+    return HardcoverSettingsResponse(configured=False)

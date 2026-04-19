@@ -53,6 +53,13 @@ set_limiter(limiter)
 @app.on_event("startup")
 async def startup_event():
     """Initialize services on application startup"""
+    # Load Studio54 API keys from studio54-keys.env (overrides main .env values)
+    try:
+        from app.api.api_keys import load_keys_into_environ
+        load_keys_into_environ()
+    except Exception as e:
+        logger.warning(f"Could not load studio54-keys.env: {e}")
+
     # Initialize logging configuration service (for multi-worker sync)
     from app.services.logging_config import get_logging_config_service
     logging_config = get_logging_config_service()
@@ -586,6 +593,7 @@ from app.api import storage_mounts as storage_mounts_api
 from app.api import listen as listen_api
 from app.api import book_progress as book_progress_api
 from app.api import book_playlists as book_playlists_api
+from app.api import api_keys as api_keys_api
 
 # Auth endpoints (login, user management)
 app.include_router(auth_api.router, prefix="/api/v1", tags=["auth"])
@@ -629,6 +637,9 @@ app.include_router(queue_status.router, prefix="/api/v1", tags=["queue-status"])
 
 # Settings (MusicBrainz, etc.)
 app.include_router(settings_api.router, prefix="/api/v1", tags=["settings"])
+
+# API Keys management
+app.include_router(api_keys_api.router, prefix="/api/v1", tags=["api-keys"])
 
 # Job Scheduler
 app.include_router(scheduler_api.router, prefix="/api/v1", tags=["scheduler"])

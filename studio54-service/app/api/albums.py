@@ -382,6 +382,45 @@ async def monitor_by_type(
     }
 
 
+@router.post("/albums/verify-and-reset", dependencies=[Depends(require_dj_or_above)])
+@rate_limit("5/minute")
+async def verify_and_reset_downloads(
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    """
+    Scan all DOWNLOADED albums, verify each linked track's file exists on disk,
+    and reset broken albums back to WANTED so they re-enter the download queue.
+    Also clears stale COMPLETED download queue entries for reset albums so
+    previously-tried NZBs are not excluded from the next search.
+    """
+    from app.tasks.download_tasks import _verify_album_files, _verify_and_set_album_status
+    from app.models.download_queue import DownloadQueue, DownloadStatus
+
+    albums = db.query(Album).filter(Album.status == AlbumStatus.DOWNLOADED).all()
+    stats = {"albums_checked": 0, "albums_reset": 0, "tracks_cleared": 0}
+
+    for album in albums:
+        stats["albums_checked"] += 1
+        result = _verify_album_files(db, album)
+        if result["broken"] > 0:
+            stats["tracks_cleared"] += result["broken"]
+            stats["albums_reset"] += 1
+            _verify_and_set_album_status(db, album)
+            # Clear completed queue entries so next search isn't blocked by old attempted GUIDs
+            db.query(DownloadQueue).filter(
+                DownloadQueue.album_id == album.id,
+                DownloadQueue.status == DownloadStatus.COMPLETED,
+            ).delete(synchronize_session=False)
+
+    db.commit()
+    logger.info(
+        f"[verify-and-reset] checked={stats['albums_checked']} "
+        f"reset={stats['albums_reset']} tracks_cleared={stats['tracks_cleared']}"
+    )
+    return stats
+
+
 @router.get("/downloads/cleanup/preview")
 @rate_limit("20/minute")
 async def preview_download_cleanup(
@@ -1194,15 +1233,17 @@ async def import_album_files(
         service = EnhancedImportService(db)
         results = service.import_album(album, source_directory)
 
-        # Update album status if files were imported
+        # Update album status based on actual linked track count
         if results['success'] and results['imported_files']:
-            album.status = AlbumStatus.DOWNLOADED
+            from app.tasks.download_tasks import _verify_and_set_album_status
+            db.refresh(album)
+            _verify_and_set_album_status(db, album)
             album.updated_at = datetime.now(timezone.utc)
             db.commit()
 
             logger.info(
                 f"Successfully imported album: {album.title} "
-                f"({len(results['imported_files'])} files)"
+                f"({len(results['imported_files'])} files, status={album.status.value})"
             )
 
         return {

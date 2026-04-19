@@ -619,7 +619,7 @@ function Artists() {
               }}
             >
               {/* Artist Image */}
-              <div className="relative bg-gradient-to-br from-[#FF1493] to-[#FF8C00] aspect-square flex items-center justify-center overflow-hidden">
+              <div className="relative bg-gradient-to-br from-[#FF1493] to-[#FF8C00] aspect-[4/5] flex items-center justify-center overflow-hidden">
                 {artist.image_url ? (
                   <img
                     src={artist.image_url?.startsWith('http') ? artist.image_url : `/api/v1/${artist.id}/cover-art`}

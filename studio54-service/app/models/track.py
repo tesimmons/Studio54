@@ -25,7 +25,7 @@ class Track(Base):
 
     # Basic info
     title = Column(Text, nullable=False)
-    musicbrainz_id = Column(String(36), nullable=True, index=True)  # Recording MBID
+    musicbrainz_id = Column(String(100), nullable=True, index=True)  # Recording MBID or local-UUID stub
 
     # Track metadata
     track_number = Column(Integer, nullable=True)
@@ -36,6 +36,9 @@ class Track(Base):
     has_file = Column(Boolean, default=False)
     file_path = Column(Text, nullable=True, index=True)  # Absolute path to the audio file
     muse_file_id = Column(UUID(as_uuid=True), nullable=True)  # External reference to MUSE music_file
+
+    # Stub flag — True for synthetic records created from metadata when no MB match exists
+    is_stub = Column(Boolean, nullable=False, default=False, server_default='false')
 
     # Lyrics (cached from LRCLIB)
     synced_lyrics = Column(Text, nullable=True)  # LRC format with timestamps

@@ -26,6 +26,9 @@ class Author(Base):
     name = Column(Text, nullable=False, index=True)
     musicbrainz_id = Column(String(100), unique=True, nullable=False, index=True)
 
+    # Stub flag — True for synthetic records created from metadata when no MB match exists
+    is_stub = Column(Boolean, nullable=False, default=False, server_default='false')
+
     # Monitoring settings (defaults to unmonitored)
     is_monitored = Column(Boolean, default=False, nullable=False)
     quality_profile_id = Column(UUID(as_uuid=True), ForeignKey("quality_profiles.id"), nullable=True)

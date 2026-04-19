@@ -2097,6 +2097,26 @@ def refresh_author_metadata(self, author_id: str, job_id: str = None, force: boo
                 except Exception as e:
                     logger.warning(f"Wikipedia image fetch/download failed for {author.name}: {e}")
 
+            # Hardcover fallback for image
+            if not image_url:
+                try:
+                    from app.services.hardcover import get_hardcover_service
+                    from app.services.cover_art_service import fetch_and_save_entity_cover_art_from_url
+                    import asyncio
+                    hc = get_hardcover_service()
+                    if hc:
+                        logger.info(f"Attempting Hardcover image fetch for {author.name}")
+                        hc_image_url = hc.fetch_author_image_url(author.name)
+                        if hc_image_url:
+                            local_path = asyncio.run(
+                                fetch_and_save_entity_cover_art_from_url("author", str(author.id), hc_image_url)
+                            )
+                            image_url = local_path
+                            image_source = "hardcover"
+                            logger.info(f"Downloaded Hardcover photo for {author.name} → {local_path}")
+                except Exception as e:
+                    logger.warning(f"Hardcover image fetch failed for {author.name}: {e}")
+
             if image_url:
                 author.image_url = image_url
                 db.commit()
@@ -2122,6 +2142,23 @@ def refresh_author_metadata(self, author_id: str, job_id: str = None, force: boo
                     logger.debug(f"No Wikipedia biography found for author {author.name}")
             except Exception as e:
                 logger.warning(f"Failed to fetch Wikipedia biography for author {author.name}: {e}")
+
+            # Hardcover fallback for biography
+            if not biography_updated:
+                try:
+                    from app.services.hardcover import get_hardcover_service
+                    hc = get_hardcover_service()
+                    if hc:
+                        logger.info(f"Attempting Hardcover bio fetch for {author.name}")
+                        hc_bio = hc.fetch_author_bio(author.name)
+                        if hc_bio:
+                            author.overview = hc_bio
+                            db.commit()
+                            biography_updated = True
+                            bio_chars = len(hc_bio)
+                            logger.info(f"[Hardcover] Fetched bio for {author.name} ({bio_chars} chars)")
+                except Exception as e:
+                    logger.warning(f"Hardcover bio fetch failed for {author.name}: {e}")
 
         # Fetch genre from MusicBrainz if missing (or if force=True)
         if (force or not author.genre) and author.musicbrainz_id:
@@ -2314,7 +2351,129 @@ def refresh_author_metadata(self, author_id: str, job_id: str = None, force: boo
             except Exception:
                 db.rollback()
 
+        # ── Step 4: Hardcover fallback (any books still missing cover art) ───
+        books_still_missing = db.query(Book).filter(
+            Book.author_id == author.id,
+            (Book.cover_art_url.is_(None)) | (Book.cover_art_url == '')
+        ).limit(MAX_BOOKS_PER_AUTHOR).all()
+
+        if books_still_missing:
+            try:
+                from app.services.hardcover import get_hardcover_service
+                from app.services.cover_art_service import fetch_and_save_entity_cover_art_from_url
+                import asyncio
+                hc = get_hardcover_service()
+                if hc:
+                    self.update_progress(
+                        percent=97.0,
+                        step=f"Checking Hardcover for {len(books_still_missing)} remaining book(s)"
+                    )
+                    for book in books_still_missing:
+                        try:
+                            cover_url = hc.fetch_book_cover_url(book.title, author_name=author.name)
+                            if cover_url:
+                                local_path = asyncio.run(
+                                    fetch_and_save_entity_cover_art_from_url("book", str(book.id), cover_url)
+                                )
+                                if local_path:
+                                    book.cover_art_url = local_path
+                                    books_updated += 1
+                                    books_found.append({"id": str(book.id), "title": book.title, "source": "hardcover"})
+                                    logger.info(f"[Hardcover] Cover art saved for '{book.title}': {local_path}")
+                        except Exception as e:
+                            logger.warning(f"[Hardcover] Failed cover fetch for '{book.title}': {e}")
+                    try:
+                        db.commit()
+                    except Exception:
+                        db.rollback()
+            except Exception as e:
+                logger.warning(f"[Hardcover] Book cover fallback failed for {author.name}: {e}")
+
         total_processed = total_needing_art + len(local_books) if local_books else total_needing_art
+
+        # ── Step 5: Genre fetch for all books (OpenLibrary subjects) ────────────
+        books_needing_genre = db.query(Book).filter(
+            Book.author_id == author.id,
+        )
+        if not force:
+            books_needing_genre = books_needing_genre.filter(
+                (Book.genre.is_(None)) | (Book.genre == '')
+            )
+        books_needing_genre = books_needing_genre.limit(MAX_BOOKS_PER_AUTHOR).all()
+
+        genres_updated = 0
+        if books_needing_genre:
+            from app.services.openlibrary import get_openlibrary_service
+            ol = get_openlibrary_service()
+
+            self.update_progress(
+                percent=98.0,
+                step=f"Fetching genres for {len(books_needing_genre)} book(s)"
+            )
+
+            for book in books_needing_genre:
+                try:
+                    genre_val = ol.fetch_book_genre(book.title, author_name=author.name)
+                    if genre_val:
+                        book.genre = genre_val
+                        genres_updated += 1
+                        logger.info(f"[Genre] '{book.title}' → {genre_val}")
+                except Exception as e:
+                    logger.warning(f"[Genre] Failed for '{book.title}': {e}")
+
+            if genres_updated:
+                try:
+                    db.commit()
+                except Exception:
+                    db.rollback()
+
+        # ── Step 6: Description/synopsis fetch ──────────────────────────────────
+        books_needing_desc = db.query(Book).filter(
+            Book.author_id == author.id,
+        )
+        if not force:
+            books_needing_desc = books_needing_desc.filter(
+                (Book.description.is_(None)) | (Book.description == '')
+            )
+        books_needing_desc = books_needing_desc.limit(MAX_BOOKS_PER_AUTHOR).all()
+
+        descriptions_updated = 0
+        if books_needing_desc:
+            hc_service = get_hardcover_service()
+            from app.services.openlibrary import get_openlibrary_service
+            ol_desc = get_openlibrary_service()
+
+            self.update_progress(
+                percent=99.0,
+                step=f"Fetching descriptions for {len(books_needing_desc)} book(s)"
+            )
+
+            for book in books_needing_desc:
+                try:
+                    desc = None
+
+                    # Try Hardcover first — find_book already returns description
+                    if hc_service:
+                        hc_result = hc_service.find_book(book.title, author_name=author.name)
+                        if hc_result:
+                            desc = hc_result.get('description')
+
+                    # Fall back to OpenLibrary Works endpoint
+                    if not desc:
+                        desc = ol_desc.fetch_book_description(book.title, author_name=author.name)
+
+                    if desc:
+                        book.description = desc
+                        descriptions_updated += 1
+                        logger.info(f"[Description] '{book.title}' — {len(desc)} chars")
+                except Exception as e:
+                    logger.warning(f"[Description] Failed for '{book.title}': {e}")
+
+            if descriptions_updated:
+                try:
+                    db.commit()
+                except Exception:
+                    db.rollback()
 
         self.update_progress(
             percent=100.0,
@@ -2323,7 +2482,7 @@ def refresh_author_metadata(self, author_id: str, job_id: str = None, force: boo
             items_total=total_processed
         )
 
-        logger.info(f"Metadata refresh complete for author {author.name}: image={author_image_updated}, biography={biography_updated}, genre={genre_updated}, books={books_updated}/{total_processed}")
+        logger.info(f"Metadata refresh complete for author {author.name}: image={author_image_updated}, biography={biography_updated}, genre={genre_updated}, books={books_updated}/{total_processed}, book_genres={genres_updated}, descriptions={descriptions_updated}")
 
         return {
             "success": True,
@@ -2338,7 +2497,8 @@ def refresh_author_metadata(self, author_id: str, job_id: str = None, force: boo
             "books_processed": total_processed,
             "books_updated": books_updated,
             "books_found": books_found,
-            "books_not_found": books_not_found
+            "books_not_found": books_not_found,
+            "descriptions_updated": descriptions_updated,
         }
 
     except Exception as e:

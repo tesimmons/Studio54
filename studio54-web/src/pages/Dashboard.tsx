@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import type { LayoutItem } from 'react-grid-layout'
 import toast from 'react-hot-toast'
 import { authApi } from '../api/client'
-import { DEFAULT_LAYOUT, WIDGET_MAP } from '../components/dashboard/widgetRegistry'
+import { DEFAULT_LAYOUT, WIDGET_MAP, getWidgetDef } from '../components/dashboard/widgetRegistry'
 import DashboardToolbar from '../components/dashboard/DashboardToolbar'
 import DashboardGrid from '../components/dashboard/DashboardGrid'
 import type { DashboardLayoutItem, DashboardPreferences } from '../types'
@@ -15,7 +15,8 @@ function Dashboard() {
   const [isEditMode, setIsEditMode] = useState(false)
   const [layouts, setLayouts] = useState<DashboardLayoutItem[]>(DEFAULT_LAYOUT)
   const [hiddenWidgets, setHiddenWidgets] = useState<string[]>([])
-  const snapshotRef = useRef<{ layouts: DashboardLayoutItem[]; hidden: string[] } | null>(null)
+  const [widgetSettings, setWidgetSettings] = useState<Record<string, Record<string, unknown>>>({})
+  const snapshotRef = useRef<{ layouts: DashboardLayoutItem[]; hidden: string[]; settings: Record<string, Record<string, unknown>> } | null>(null)
 
   // Fetch user preferences
   const { data: prefs, isLoading } = useQuery({
@@ -41,6 +42,9 @@ function Dashboard() {
       if (dash.hiddenWidgets) {
         setHiddenWidgets(dash.hiddenWidgets)
       }
+      if (dash.widgetSettings) {
+        setWidgetSettings(dash.widgetSettings)
+      }
     }
   }, [prefs])
 
@@ -59,14 +63,15 @@ function Dashboard() {
   })
 
   const handleEnterEdit = useCallback(() => {
-    snapshotRef.current = { layouts: [...layouts], hidden: [...hiddenWidgets] }
+    snapshotRef.current = { layouts: [...layouts], hidden: [...hiddenWidgets], settings: { ...widgetSettings } }
     setIsEditMode(true)
-  }, [layouts, hiddenWidgets])
+  }, [layouts, hiddenWidgets, widgetSettings])
 
   const handleCancel = useCallback(() => {
     if (snapshotRef.current) {
       setLayouts(snapshotRef.current.layouts)
       setHiddenWidgets(snapshotRef.current.hidden)
+      setWidgetSettings(snapshotRef.current.settings)
     }
     setIsEditMode(false)
   }, [])
@@ -76,8 +81,9 @@ function Dashboard() {
       version: CURRENT_SCHEMA_VERSION,
       layouts: { lg: layouts },
       hiddenWidgets,
+      widgetSettings,
     })
-  }, [layouts, hiddenWidgets, saveMutation])
+  }, [layouts, hiddenWidgets, widgetSettings, saveMutation])
 
   const handleLayoutChange = useCallback((newLayout: LayoutItem[]) => {
     if (!isEditMode) return
@@ -99,6 +105,27 @@ function Dashboard() {
 
   const handleHideWidget = useCallback((id: string) => {
     setHiddenWidgets((prev) => [...prev, id])
+  }, [])
+
+  const handleUpdateWidgetSettings = useCallback((instanceId: string, settings: Record<string, unknown>) => {
+    setWidgetSettings((prev) => ({ ...prev, [instanceId]: settings }))
+  }, [])
+
+  const handleAddConfigurableWidget = useCallback((typeId: string) => {
+    const widget = getWidgetDef(typeId)
+    if (!widget) return
+    // Use timestamp to make instance id unique and stable across reloads
+    const instanceId = `${typeId}__${Date.now()}`
+    const newItem: DashboardLayoutItem = {
+      i: instanceId,
+      x: 0,
+      y: Infinity,
+      w: widget.defaultSize.w,
+      h: widget.defaultSize.h,
+      minW: widget.minSize.w,
+      minH: widget.minSize.h,
+    }
+    setLayouts((prev) => [...prev, newItem])
   }, [])
 
   const handleAddWidget = useCallback((id: string) => {
@@ -140,6 +167,7 @@ function Dashboard() {
         onCancel={handleCancel}
         onSave={handleSave}
         onAddWidget={handleAddWidget}
+        onAddConfigurableWidget={handleAddConfigurableWidget}
         isSaving={saveMutation.isPending}
       />
       <DashboardGrid
@@ -148,6 +176,8 @@ function Dashboard() {
         isEditMode={isEditMode}
         onLayoutChange={handleLayoutChange}
         onHideWidget={handleHideWidget}
+        widgetSettings={widgetSettings}
+        onWidgetSettingsChange={handleUpdateWidgetSettings}
       />
     </div>
   )

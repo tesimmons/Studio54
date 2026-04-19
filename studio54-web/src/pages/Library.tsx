@@ -344,6 +344,21 @@ function Library() {
     }
   })
 
+  const resolveUnlinkedMutation = useMutation({
+    mutationFn: () => fileOrganizationApi.resolveUnlinkedFiles(),
+    onSuccess: (data) => {
+      toast.success(`Resolution job started — job ID: ${data.job_id}`)
+      setTimeout(() => {
+        refetchUnlinked()
+        queryClient.invalidateQueries({ queryKey: ['unlinked-summary', 'music'] })
+      }, 3000)
+    },
+    onError: (err: any) => {
+      const msg = err?.response?.data?.detail || 'Failed to start resolve job'
+      toast.error(msg)
+    },
+  })
+
   const toggleSelection = (id: string) => {
     const newSelected = new Set(selectedIds)
     if (newSelected.has(id)) {
@@ -1297,6 +1312,19 @@ function Library() {
               >
                 <FiFileText className="w-4 h-4 mr-1" />
                 Export CSV
+              </button>
+              <button
+                className="btn btn-sm btn-primary flex items-center gap-1.5"
+                onClick={() => resolveUnlinkedMutation.mutate()}
+                disabled={resolveUnlinkedMutation.isPending}
+                title="Run all resolution phases against unlinked files: create missing artists, MBID matching, AcoustID fingerprinting, metadata stubs"
+              >
+                {resolveUnlinkedMutation.isPending ? (
+                  <FiLoader className="w-4 h-4 animate-spin" />
+                ) : (
+                  <FiLink className="w-4 h-4" />
+                )}
+                Resolve All
               </button>
             </div>
           </div>

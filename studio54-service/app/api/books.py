@@ -3,6 +3,7 @@ Books API Router
 Book management and search endpoints for audiobook library
 """
 
+import json
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Query, Body, UploadFile, File
@@ -14,6 +15,23 @@ from typing import List, Optional
 from datetime import datetime, timezone
 from pydantic import BaseModel
 import logging
+
+
+def _parse_co_authors(raw: Optional[str]) -> List[str]:
+    """Deserialize co_authors JSON string to a list. Returns [] on any error."""
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+        return [str(n) for n in parsed] if isinstance(parsed, list) else []
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+
+def _serialize_co_authors(names: List[str]) -> Optional[str]:
+    """Serialize a list of co-author names to a JSON string, or None if empty."""
+    cleaned = [n.strip() for n in names if n.strip()]
+    return json.dumps(cleaned) if cleaned else None
 
 from app.database import get_db
 from app.auth import require_dj_or_above, require_any_user
@@ -44,11 +62,23 @@ class BookMetadataEditRequest(BaseModel):
     title: Optional[str] = None
     author_name: Optional[str] = None  # Written to file tags (and credit_name); reassignment via author_id
     author_id: Optional[str] = None    # Reassigns the book to a different author record
+    co_authors: Optional[List[str]] = None  # Full replacement list; None = no change, [] = clear all
 
 
 class BulkBookUpdateRequest(BaseModel):
     book_ids: List[str]
     monitored: bool
+
+
+class BulkMoveToAuthorRequest(BaseModel):
+    book_ids: List[str]
+    author_id: Optional[str] = None       # existing author UUID
+    new_author_name: Optional[str] = None  # create stub if not found
+    co_author_name: Optional[str] = None  # optional secondary author to add to each moved book
+
+
+class SetLeadAuthorRequest(BaseModel):
+    lead_name: str  # name of the author to promote as lead (current author or a co-author)
 
 
 class MonitorByAuthorRequest(BaseModel):
@@ -109,14 +139,16 @@ async def list_books(
         )
     )
 
-    # Fuzzy search on book title and author name
+    # Fuzzy search on book title, author name, and co-authors
     _best_similarity = None
     if search_query:
         query = query.join(Author, Book.author_id == Author.id)
         title_filter, title_sim = fuzzy_search_filter(Book.title, search_query)
         author_filter, author_sim = fuzzy_search_filter(Author.name, search_query)
+        # co_authors is a JSON string — simple ILIKE covers substring match on names inside it
+        co_author_filter = Book.co_authors.ilike(f"%{search_query}%")
 
-        query = query.filter(or_(title_filter, author_filter))
+        query = query.filter(or_(title_filter, author_filter, co_author_filter))
         _best_similarity = func.greatest(title_sim, author_sim)
 
     if status_filter:
@@ -178,6 +210,9 @@ async def list_books(
                 "chapter_count": book.chapter_count,
                 "cover_art_url": book.cover_art_url,
                 "credit_name": book.credit_name,
+                "co_authors": _parse_co_authors(book.co_authors),
+                "genre": book.genre,
+                "description": book.description,
                 "custom_folder_path": book.custom_folder_path,
                 "linked_files_count": int(linked_count or 0),
                 "related_series": book.related_series
@@ -371,6 +406,9 @@ async def get_book(
         "monitored": book.monitored,
         "cover_art_url": book.cover_art_url,
         "credit_name": book.credit_name,
+        "co_authors": _parse_co_authors(book.co_authors),
+        "genre": book.genre,
+        "description": book.description,
         "custom_folder_path": book.custom_folder_path,
         "chapter_count": len(chapters),
         "added_at": book.added_at.isoformat() if book.added_at else None,
@@ -724,6 +762,80 @@ async def upload_book_cover_art_from_url(
     return {"message": "Cover art saved", "cover_art_url": book.cover_art_url}
 
 
+@router.post("/books/{book_id}/refresh-metadata")
+@rate_limit("30/minute")
+async def refresh_book_metadata(
+    request: Request,
+    book_id: str,
+    current_user: User = Depends(require_any_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Refresh description and genre for a single book by fetching from
+    Hardcover (primary) or OpenLibrary (fallback).
+    Runs synchronously — typically completes in 1-3 seconds.
+    """
+    from app.models.book import Book as BookModel
+    from app.models.author import Author as AuthorModel
+    from app.services.openlibrary import get_openlibrary_service
+    from app.services.hardcover import get_hardcover_service
+
+    book = db.query(BookModel).filter(BookModel.id == book_id).first()
+    if not book:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    author = db.query(AuthorModel).filter(AuthorModel.id == book.author_id).first()
+    author_name = author.name if author else None
+
+    updated_fields = []
+
+    # ── Description ──────────────────────────────────────────────────────────
+    desc = None
+    hc = get_hardcover_service()
+    if hc:
+        try:
+            hc_result = hc.find_book(book.title, author_name=author_name)
+            if hc_result:
+                desc = hc_result.get('description')
+        except Exception:
+            pass
+
+    if not desc:
+        try:
+            ol = get_openlibrary_service()
+            desc = ol.fetch_book_description(book.title, author_name=author_name)
+        except Exception:
+            pass
+
+    if desc:
+        book.description = desc
+        updated_fields.append('description')
+
+    # ── Genre ─────────────────────────────────────────────────────────────────
+    try:
+        ol = get_openlibrary_service()
+        genre_val = ol.fetch_book_genre(book.title, author_name=author_name)
+        if genre_val:
+            book.genre = genre_val
+            updated_fields.append('genre')
+    except Exception:
+        pass
+
+    if updated_fields:
+        db.commit()
+        db.refresh(book)
+
+    return {
+        "success": True,
+        "book_id": str(book.id),
+        "title": book.title,
+        "updated_fields": updated_fields,
+        "description": book.description,
+        "genre": book.genre,
+    }
+
+
 @router.post("/books/{book_id}/edit-metadata")
 @rate_limit("20/minute")
 async def edit_book_metadata(
@@ -748,8 +860,9 @@ async def edit_book_metadata(
     new_title = (body.title or "").strip() or None
     new_author = (body.author_name or "").strip() or None
     new_author_id = (body.author_id or "").strip() or None
+    new_co_authors = body.co_authors  # None = no change; [] = clear; [...] = replace
 
-    if not new_title and not new_author and not new_author_id:
+    if not new_title and not new_author and not new_author_id and new_co_authors is None:
         raise HTTPException(status_code=400, detail="Provide at least one field to update")
 
     # Validate and resolve new author record
@@ -772,6 +885,8 @@ async def edit_book_metadata(
         if not new_author:
             new_author = new_author_record.name
             book.credit_name = None  # clear override so it inherits author name
+    if new_co_authors is not None:
+        book.co_authors = _serialize_co_authors(new_co_authors)
     book.updated_at = datetime.now(timezone.utc)
     db.commit()
 
@@ -805,8 +920,265 @@ async def edit_book_metadata(
         "author_id": str(book.author_id),
         "author_name": new_author_record.name if new_author_record else None,
         "credit_name": book.credit_name,
+        "co_authors": _parse_co_authors(book.co_authors),
         "chapters_to_update": chapter_count if task_id else 0,
         "task_id": task_id,
+    }
+
+
+@router.post("/books/{book_id}/set-lead-author")
+@rate_limit("20/minute")
+async def set_lead_author(
+    request: Request,
+    book_id: str,
+    body: SetLeadAuthorRequest,
+    current_user: User = Depends(require_dj_or_above),
+    db: Session = Depends(get_db),
+):
+    """
+    Promote one name from the author + co-author pool to be the sole lead author.
+
+    Behaviour:
+      - If lead_name matches the current DB author → nothing changes in the DB;
+        file tags are rewritten with that name (no-op if tags already correct),
+        and that name is removed from co_authors if present.
+      - If lead_name matches a co-author → the current author is demoted to
+        co-author, an Author record is found-or-created for lead_name, the book
+        is reassigned to it, and file tags are updated.
+    In both cases the final co_authors list will not contain the lead name, and
+    the lead will not appear in co_authors.
+    """
+    import uuid as uuid_lib
+
+    validate_uuid(book_id)
+    book = db.query(Book).filter(Book.id == uuid_lib.UUID(book_id)).first()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    lead_name = body.lead_name.strip()
+    if not lead_name:
+        raise HTTPException(status_code=400, detail="lead_name must not be empty")
+
+    current_author_name = book.author.name if book.author else ""
+    current_co_authors = _parse_co_authors(book.co_authors)
+
+    all_names = [current_author_name] + current_co_authors
+    if not any(n.lower() == lead_name.lower() for n in all_names if n):
+        raise HTTPException(
+            status_code=400,
+            detail=f"'{lead_name}' is not in the author/co-author list for this book"
+        )
+
+    # Normalise lead_name to the actual casing stored
+    lead_name = next(n for n in all_names if n and n.lower() == lead_name.lower())
+
+    new_author_name = lead_name
+    reassigned = False
+
+    if lead_name.lower() != current_author_name.lower():
+        # Lead is a co-author — find or create an Author record for them
+        new_author = db.query(Author).filter(
+            func.lower(Author.name) == lead_name.lower()
+        ).first()
+        if not new_author:
+            new_author = Author(name=lead_name)
+            db.add(new_author)
+            db.flush()
+            # Queue metadata fetch for the new stub
+            from app.tasks.sync_tasks import refresh_author_metadata
+            from app.models.job_state import JobType
+            refresh_author_metadata.apply_async(
+                args=[str(new_author.id)],
+                kwargs={
+                    "job_type": JobType.METADATA_REFRESH,
+                    "entity_type": "author",
+                    "entity_id": str(new_author.id),
+                }
+            )
+        book.author_id = new_author.id
+        book.credit_name = None  # inherit the new author's name
+        reassigned = True
+
+        # Demote the old author name to co-authors (unless already there)
+        if current_author_name and current_author_name.lower() not in [c.lower() for c in current_co_authors]:
+            current_co_authors.append(current_author_name)
+
+    # Remove lead from co-authors (case-insensitive)
+    new_co_authors = [c for c in current_co_authors if c.lower() != lead_name.lower()]
+    book.co_authors = _serialize_co_authors(new_co_authors)
+    book.updated_at = datetime.now(timezone.utc)
+    db.commit()
+
+    # Queue file tag rewrite
+    from app.tasks.sync_tasks import rewrite_book_file_tags
+    from app.models.job_state import JobType
+
+    chapter_count = db.query(Chapter).filter(
+        Chapter.book_id == book.id,
+        Chapter.has_file == True,
+        Chapter.file_path.isnot(None),
+    ).count()
+
+    task_id = None
+    if chapter_count > 0:
+        task = rewrite_book_file_tags.apply_async(
+            args=[book_id],
+            kwargs={
+                "new_author": new_author_name,
+                "job_type": JobType.METADATA_REFRESH,
+                "entity_type": "book",
+                "entity_id": book_id,
+            }
+        )
+        task_id = task.id
+
+    logger.info(
+        f"set_lead_author book={book.title!r}: lead='{lead_name}' "
+        f"reassigned={reassigned} co_authors={new_co_authors} tag_task={task_id}"
+    )
+
+    return {
+        "success": True,
+        "book_id": book_id,
+        "lead_author": lead_name,
+        "co_authors": new_co_authors,
+        "reassigned": reassigned,
+        "chapters_to_update": chapter_count,
+        "task_id": task_id,
+    }
+
+
+@router.post("/books/bulk-move-author")
+@rate_limit("10/minute")
+async def bulk_move_books_to_author(
+    request: Request,
+    body: BulkMoveToAuthorRequest,
+    current_user: User = Depends(require_dj_or_above),
+    db: Session = Depends(get_db),
+):
+    """
+    Move a set of books to a different (or new) author.
+
+    - If author_id is provided, reassign to that existing author.
+    - If new_author_name is provided (and no author_id), look up by name;
+      create a stub author if not found, then queue a metadata fetch for it.
+    - Queues a rewrite_book_file_tags task per book to update artist tags.
+    """
+    import uuid as uuid_lib
+
+    if not body.book_ids:
+        raise HTTPException(status_code=400, detail="book_ids cannot be empty")
+    if not body.author_id and not body.new_author_name:
+        raise HTTPException(status_code=400, detail="Provide author_id or new_author_name")
+
+    for bid in body.book_ids:
+        validate_uuid(bid, "Book ID")
+
+    # Resolve or create the target author
+    target_author: Optional[Author] = None
+    stub_created = False
+    metadata_task_id = None
+
+    if body.author_id:
+        validate_uuid(body.author_id, "Author ID")
+        target_author = db.query(Author).filter(
+            Author.id == uuid_lib.UUID(body.author_id)
+        ).first()
+        if not target_author:
+            raise HTTPException(status_code=404, detail="Target author not found")
+    else:
+        name = body.new_author_name.strip()
+        target_author = db.query(Author).filter(
+            func.lower(Author.name) == name.lower()
+        ).first()
+        if not target_author:
+            # Create stub author — generate a local MBID to satisfy NOT NULL constraint
+            target_author = Author(
+                name=name,
+                musicbrainz_id=f"local-{uuid_lib.uuid4()}",
+                is_stub=True,
+            )
+            db.add(target_author)
+            db.flush()  # get the ID without committing yet
+            stub_created = True
+
+    author_name = target_author.name
+    author_id_str = str(target_author.id)
+
+    # Reassign each book and queue tag rewrites
+    from app.tasks.sync_tasks import rewrite_book_file_tags
+    from app.models.job_state import JobType
+
+    task_ids = []
+    moved_count = 0
+
+    import json as _json
+    for bid in body.book_ids:
+        book = db.query(Book).filter(Book.id == uuid_lib.UUID(bid)).first()
+        if not book:
+            continue
+        book.author_id = target_author.id
+        book.credit_name = None  # clear any override so it inherits the new author name
+        book.updated_at = datetime.now(timezone.utc)
+        # Optionally attach a secondary/co-author
+        if body.co_author_name and body.co_author_name.strip():
+            existing = _parse_co_authors(book.co_authors)
+            co = body.co_author_name.strip()
+            if co not in existing:
+                existing.append(co)
+            book.co_authors = _serialize_co_authors(existing)
+        moved_count += 1
+
+    db.commit()
+
+    # Queue file tag rewrites after commit (so workers see updated DB state)
+    for bid in body.book_ids:
+        book = db.query(Book).filter(Book.id == uuid_lib.UUID(bid)).first()
+        if not book:
+            continue
+        chapter_count = db.query(Chapter).filter(
+            Chapter.book_id == book.id,
+            Chapter.has_file == True,
+            Chapter.file_path.isnot(None),
+        ).count()
+        if chapter_count > 0:
+            task = rewrite_book_file_tags.apply_async(
+                args=[bid],
+                kwargs={
+                    "new_author": author_name,
+                    "job_type": JobType.METADATA_REFRESH,
+                    "entity_type": "book",
+                    "entity_id": bid,
+                }
+            )
+            task_ids.append(task.id)
+
+    # Queue metadata fetch for new stub author
+    if stub_created:
+        from app.tasks.sync_tasks import refresh_author_metadata
+        meta_task = refresh_author_metadata.apply_async(
+            args=[author_id_str],
+            kwargs={
+                "job_type": JobType.METADATA_REFRESH,
+                "entity_type": "author",
+                "entity_id": author_id_str,
+            }
+        )
+        metadata_task_id = meta_task.id
+
+    logger.info(
+        f"Bulk moved {moved_count} books → author '{author_name}' "
+        f"(stub={stub_created}, tag_tasks={len(task_ids)})"
+    )
+
+    return {
+        "success": True,
+        "moved_count": moved_count,
+        "author_id": author_id_str,
+        "author_name": author_name,
+        "stub_created": stub_created,
+        "tag_task_ids": task_ids,
+        "metadata_task_id": metadata_task_id,
     }
 
 

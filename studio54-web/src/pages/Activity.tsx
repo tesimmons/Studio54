@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
-import { jobsApi, downloadHistoryApi, type Job, type JobStats } from '../api/client'
+import { jobsApi, downloadHistoryApi, albumsApi, type Job, type JobStats } from '../api/client'
 import { useAuth } from '../contexts/AuthContext'
 import QueueStatus from './QueueStatus'
 import {
@@ -20,6 +20,7 @@ import {
   FiInfo,
   FiChevronLeft,
   FiChevronRight,
+  FiZapOff,
 } from 'react-icons/fi'
 import Pagination from '../components/Pagination'
 
@@ -64,6 +65,7 @@ function Activity() {
   const [logLoading, setLogLoading] = useState(false)
   const [page, setPage] = useState(1)
   const [itemsPerPage, setItemsPerPage] = useState(DEFAULT_PER_PAGE)
+  const [showForceClearModal, setShowForceClearModal] = useState(false)
   const queryClient = useQueryClient()
 
   // Fetch jobs with auto-refresh every 5 seconds
@@ -236,6 +238,48 @@ function Activity() {
       clearAllMutation.mutate(true)
     }
   }
+
+  // Verify & Reset mutation — scans DOWNLOADED albums, resets broken ones to WANTED
+  const verifyResetMutation = useMutation({
+    mutationFn: albumsApi.verifyAndReset,
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['download-history'] })
+      alert(
+        `Verify & Reset complete:\n` +
+        `• Albums checked: ${data.albums_checked}\n` +
+        `• Albums reset to Wanted: ${data.albums_reset}\n` +
+        `• Missing tracks cleared: ${data.tracks_cleared}`
+      )
+    },
+    onError: (err: unknown) => {
+      const msg = (err as { response?: { data?: { detail?: string } }, message?: string })
+        ?.response?.data?.detail || (err as Error).message || 'Unknown error'
+      alert(`Verify & Reset failed: ${msg}`)
+    },
+  })
+
+  const handleVerifyAndReset = () => {
+    if (confirm(
+      'This will scan all downloaded albums, check that every track file exists on disk, ' +
+      'and reset any broken albums back to Wanted so they re-download.\n\nContinue?'
+    )) {
+      verifyResetMutation.mutate()
+    }
+  }
+
+  // Force-clear all active/stuck jobs
+  const forceClearMutation = useMutation({
+    mutationFn: jobsApi.forceClearActive,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['jobs'] })
+      queryClient.invalidateQueries({ queryKey: ['jobStats'] })
+    },
+    onError: (err: unknown) => {
+      const msg = (err as { response?: { data?: { detail?: string } }, message?: string })
+        ?.response?.data?.detail || (err as Error).message || 'Unknown error'
+      alert(`Force clear failed: ${msg}`)
+    },
+  })
 
   const getStatusBadge = (status: string) => {
     switch (status.toLowerCase()) {
@@ -579,6 +623,16 @@ function Activity() {
                   </span>
                 </div>
               )}
+              <div className="flex flex-col justify-end ml-2">
+                <label className="block text-xs mb-1">&nbsp;</label>
+                <button
+                  onClick={handleVerifyAndReset}
+                  disabled={verifyResetMutation.isPending}
+                  className="px-3 py-1.5 text-sm font-medium rounded-md bg-[#FF1493]/10 text-[#FF1493] hover:bg-[#FF1493]/20 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap transition-colors"
+                >
+                  {verifyResetMutation.isPending ? 'Scanning...' : 'Verify & Reset'}
+                </button>
+              </div>
             </div>
           </div>
 
@@ -836,6 +890,15 @@ function Activity() {
                 <span>Clear All (Inc. Active)</span>
               </button>
             )}
+            <button
+              className="btn btn-sm flex items-center space-x-2 bg-orange-600 hover:bg-orange-700 text-white border-orange-600"
+              onClick={() => setShowForceClearModal(true)}
+              disabled={forceClearMutation.isPending}
+              title="Force-kill all stuck or running jobs and verify they are cleared from the database"
+            >
+              <FiZapOff className="h-4 w-4" />
+              <span>{forceClearMutation.isPending ? 'Clearing...' : 'Force Clear Stuck Jobs'}</span>
+            </button>
           </div>
         </div>
       </div>
@@ -1161,6 +1224,67 @@ function Activity() {
                 >
                   Close
                 </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Force Clear Stuck Jobs — Confirmation Modal */}
+      {showForceClearModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+          <div
+            className="bg-white dark:bg-[#161B22] rounded-xl shadow-2xl border border-gray-200 dark:border-[#30363D] w-full max-w-md mx-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-6">
+              <div className="flex items-start space-x-3 mb-4">
+                <div className="flex-shrink-0 w-10 h-10 rounded-full bg-orange-100 dark:bg-orange-900/30 flex items-center justify-center">
+                  <FiZapOff className="w-5 h-5 text-orange-600 dark:text-orange-400" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Force Clear Stuck Jobs</h3>
+                  <p className="text-sm text-gray-500 dark:text-[#8B949E] mt-1">This action cannot be undone.</p>
+                </div>
+              </div>
+
+              <div className="text-sm text-gray-700 dark:text-[#E6EDF3] space-y-2 mb-6">
+                <p>This will immediately:</p>
+                <ul className="list-disc list-inside space-y-1 text-gray-600 dark:text-[#8B949E] ml-2">
+                  <li>Send a kill signal to all running Celery tasks</li>
+                  <li>Mark every pending, running, paused, and stalled job as cancelled or failed</li>
+                  <li>Clear stuck resolve, scan, import, and organization jobs across all job tables</li>
+                  <li>Verify the database has no remaining active jobs and report back</li>
+                </ul>
+                <p className="mt-3 text-orange-700 dark:text-orange-400 font-medium">
+                  Any work in progress will be lost. Use this only when jobs are genuinely stuck and not responding.
+                </p>
+              </div>
+
+              {forceClearMutation.isSuccess && forceClearMutation.data && (
+                <div className={`mb-4 p-3 rounded-lg text-sm ${forceClearMutation.data.verified_clear ? 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400 border border-green-200 dark:border-green-800' : 'bg-yellow-50 dark:bg-yellow-900/20 text-yellow-700 dark:text-yellow-400 border border-yellow-200 dark:border-yellow-800'}`}>
+                  <p className="font-semibold">{forceClearMutation.data.verified_clear ? 'All jobs cleared and verified.' : `Warning: ${forceClearMutation.data.remaining_active} job(s) still active.`}</p>
+                  <p className="mt-1">Cancelled: {forceClearMutation.data.total_cancelled} total — {forceClearMutation.data.job_state_cancelled} jobs, {forceClearMutation.data.file_org_cancelled} file-org, {forceClearMutation.data.scan_job_cancelled} scans, {forceClearMutation.data.import_job_cancelled} imports</p>
+                </div>
+              )}
+
+              <div className="flex justify-end space-x-3">
+                <button
+                  className="btn btn-secondary"
+                  onClick={() => { setShowForceClearModal(false); forceClearMutation.reset() }}
+                  disabled={forceClearMutation.isPending}
+                >
+                  {forceClearMutation.isSuccess ? 'Close' : 'Cancel'}
+                </button>
+                {!forceClearMutation.isSuccess && (
+                  <button
+                    className="px-4 py-2 text-sm font-medium rounded-md bg-orange-600 hover:bg-orange-700 text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    onClick={() => forceClearMutation.mutate()}
+                    disabled={forceClearMutation.isPending}
+                  >
+                    {forceClearMutation.isPending ? 'Clearing...' : 'Yes, Force Clear'}
+                  </button>
+                )}
               </div>
             </div>
           </div>

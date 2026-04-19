@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { FiEdit2, FiSave, FiX, FiPlus } from 'react-icons/fi'
-import { WIDGET_MAP, CATEGORY_LABELS } from './widgetRegistry'
+import { WIDGET_MAP, CATEGORY_LABELS, CONFIGURABLE_WIDGETS } from './widgetRegistry'
 import type { WidgetCategory } from '../../types'
 import { useAuth } from '../../contexts/AuthContext'
 
@@ -11,6 +11,7 @@ interface DashboardToolbarProps {
   onCancel: () => void
   onSave: () => void
   onAddWidget: (id: string) => void
+  onAddConfigurableWidget: (typeId: string) => void
   isSaving: boolean
 }
 
@@ -21,6 +22,7 @@ export default function DashboardToolbar({
   onCancel,
   onSave,
   onAddWidget,
+  onAddConfigurableWidget,
   isSaving,
 }: DashboardToolbarProps) {
   const [showPicker, setShowPicker] = useState(false)
@@ -37,6 +39,13 @@ export default function DashboardToolbar({
     return acc
   }, {} as Record<WidgetCategory, string[]>)
 
+  // Configurable widget types always available to add new instances of
+  const addableConfigurables = CONFIGURABLE_WIDGETS.filter(
+    w => !(w.requiredRole === 'director' && !isDirector)
+  )
+
+  const hasAnythingToAdd = hiddenWidgets.length > 0 || addableConfigurables.length > 0
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -52,7 +61,7 @@ export default function DashboardToolbar({
               <button
                 onClick={() => setShowPicker(!showPicker)}
                 className="btn btn-secondary flex items-center gap-1.5 text-sm"
-                disabled={hiddenWidgets.length === 0}
+                disabled={!hasAnythingToAdd}
               >
                 <FiPlus className="w-4 h-4" />
                 Add Widget{hiddenWidgets.length > 0 && ` (${hiddenWidgets.length})`}
@@ -76,34 +85,59 @@ export default function DashboardToolbar({
       </div>
 
       {/* Widget Picker Panel */}
-      {isEditMode && showPicker && hiddenWidgets.length > 0 && (
-        <div className="card p-4">
-          <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">Hidden Widgets</h3>
-          <div className="space-y-3">
-            {(Object.entries(hiddenByCategory) as [WidgetCategory, string[]][]).map(([category, ids]) => (
-              <div key={category}>
-                <p className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5 uppercase tracking-wider">{CATEGORY_LABELS[category]}</p>
-                <div className="flex flex-wrap gap-2">
-                  {ids.map((id) => {
-                    const w = WIDGET_MAP.get(id)!
-                    return (
-                      <button
-                        key={id}
-                        onClick={() => {
-                          onAddWidget(id)
-                          if (hiddenWidgets.length <= 1) setShowPicker(false)
-                        }}
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm bg-gray-100 dark:bg-[#0D1117] text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-200 dark:hover:bg-[#30363D] transition-colors border border-gray-200 dark:border-[#30363D]"
-                      >
-                        <FiPlus className="w-3.5 h-3.5" />
-                        {w.label}
-                      </button>
-                    )
-                  })}
-                </div>
+      {isEditMode && showPicker && hasAnythingToAdd && (
+        <div className="card p-4 space-y-4">
+          {/* Configurable widgets — always addable as new instances */}
+          {addableConfigurables.length > 0 && (
+            <div>
+              <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1">Add New</h3>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">These widgets support multiple instances — each can be configured independently.</p>
+              <div className="flex flex-wrap gap-2">
+                {addableConfigurables.map((w) => (
+                  <button
+                    key={w.id}
+                    onClick={() => onAddConfigurableWidget(w.id)}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm bg-[#FF1493]/10 text-[#FF1493] dark:text-[#ff4da6] rounded-lg hover:bg-[#FF1493]/20 transition-colors border border-[#FF1493]/30"
+                  >
+                    <FiPlus className="w-3.5 h-3.5" />
+                    {w.label}
+                  </button>
+                ))}
               </div>
-            ))}
-          </div>
+            </div>
+          )}
+
+          {/* Hidden widgets — restore previously removed widgets */}
+          {hiddenWidgets.length > 0 && (
+            <div>
+              <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">Hidden Widgets</h3>
+              <div className="space-y-3">
+                {(Object.entries(hiddenByCategory) as [WidgetCategory, string[]][]).map(([category, ids]) => (
+                  <div key={category}>
+                    <p className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5 uppercase tracking-wider">{CATEGORY_LABELS[category]}</p>
+                    <div className="flex flex-wrap gap-2">
+                      {ids.map((id) => {
+                        const w = WIDGET_MAP.get(id)!
+                        return (
+                          <button
+                            key={id}
+                            onClick={() => {
+                              onAddWidget(id)
+                              if (hiddenWidgets.length <= 1 && addableConfigurables.length === 0) setShowPicker(false)
+                            }}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm bg-gray-100 dark:bg-[#0D1117] text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-200 dark:hover:bg-[#30363D] transition-colors border border-gray-200 dark:border-[#30363D]"
+                          >
+                            <FiPlus className="w-3.5 h-3.5" />
+                            {w.label}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

@@ -1428,6 +1428,114 @@ def delete_job(
     raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
 
 
+@router.post("/force-clear-active")
+def force_clear_active_jobs(
+    current_user: User = Depends(require_director),
+    db: Session = Depends(get_db)
+):
+    """
+    Force-cancel and remove ALL active (running/pending/paused/stalled) jobs across
+    every job table.  Revokes Celery tasks with SIGKILL, marks records CANCELLED/FAILED,
+    then does a verification pass to confirm nothing is still active in the DB.
+
+    Returns counts per table plus a verified_clear flag.
+    """
+    now = datetime.now(timezone.utc)
+    result = {
+        "job_state_cancelled": 0,
+        "file_org_cancelled": 0,
+        "scan_job_cancelled": 0,
+        "import_job_cancelled": 0,
+        "total_cancelled": 0,
+        "verified_clear": False,
+        "remaining_active": 0,
+    }
+
+    # ── 1. JobState ──────────────────────────────────────────────────────────
+    active_jobs = db.query(JobState).filter(
+        JobState.status.in_([JobStatus.PENDING, JobStatus.RUNNING, JobStatus.PAUSED, JobStatus.STALLED])
+    ).all()
+
+    for job in active_jobs:
+        if job.celery_task_id:
+            try:
+                celery_app.control.revoke(job.celery_task_id, terminate=True, signal='SIGKILL')
+            except Exception:
+                pass
+        job.status = JobStatus.CANCELLED
+        job.completed_at = now
+        job.updated_at = now
+        job.error_message = "Force-cleared by user"
+        result["job_state_cancelled"] += 1
+
+    # ── 2. FileOrganizationJob ───────────────────────────────────────────────
+    active_file_jobs = db.query(FileOrganizationJob).filter(
+        FileOrganizationJob.status.in_([FileOrgJobStatus.PENDING, FileOrgJobStatus.RUNNING])
+    ).all()
+
+    for job in active_file_jobs:
+        if job.celery_task_id:
+            try:
+                celery_app.control.revoke(job.celery_task_id, terminate=True, signal='SIGKILL')
+            except Exception:
+                pass
+        job.status = FileOrgJobStatus.FAILED
+        job.error_message = "Force-cleared by user"
+        if hasattr(job, 'completed_at'):
+            job.completed_at = now
+        result["file_org_cancelled"] += 1
+
+    # ── 3. ScanJob ───────────────────────────────────────────────────────────
+    active_scans = db.query(ScanJob).filter(
+        ScanJob.status.in_(['pending', 'running'])
+    ).all()
+
+    for job in active_scans:
+        job.status = 'cancelled'
+        job.error_message = "Force-cleared by user"
+        if hasattr(job, 'completed_at'):
+            job.completed_at = now
+        result["scan_job_cancelled"] += 1
+
+    # ── 4. LibraryImportJob ──────────────────────────────────────────────────
+    active_imports = db.query(LibraryImportJob).filter(
+        LibraryImportJob.status.in_(['pending', 'running', 'stalled'])
+    ).all()
+
+    for job in active_imports:
+        job.status = 'failed'
+        job.error_message = "Force-cleared by user"
+        if hasattr(job, 'completed_at'):
+            job.completed_at = now
+        result["import_job_cancelled"] += 1
+
+    db.commit()
+
+    result["total_cancelled"] = (
+        result["job_state_cancelled"] +
+        result["file_org_cancelled"] +
+        result["scan_job_cancelled"] +
+        result["import_job_cancelled"]
+    )
+
+    # ── 5. Verification pass ─────────────────────────────────────────────────
+    remaining = (
+        db.query(JobState).filter(
+            JobState.status.in_([JobStatus.PENDING, JobStatus.RUNNING, JobStatus.PAUSED, JobStatus.STALLED])
+        ).count()
+        + db.query(FileOrganizationJob).filter(
+            FileOrganizationJob.status.in_([FileOrgJobStatus.PENDING, FileOrgJobStatus.RUNNING])
+        ).count()
+        + db.query(ScanJob).filter(ScanJob.status.in_(['pending', 'running'])).count()
+        + db.query(LibraryImportJob).filter(LibraryImportJob.status.in_(['pending', 'running', 'stalled'])).count()
+    )
+
+    result["remaining_active"] = remaining
+    result["verified_clear"] = (remaining == 0)
+
+    return result
+
+
 @router.delete("")
 def clear_job_history(
     include_active: bool = Query(False, description="Include active jobs (pending, running, paused)"),

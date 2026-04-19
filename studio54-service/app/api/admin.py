@@ -4,8 +4,10 @@ Includes logging control, system settings, library management, etc.
 """
 
 import logging
+import re
+import subprocess
 from typing import Dict, List, Optional
-from fastapi import APIRouter, Depends, Request, HTTPException, status
+from fastapi import APIRouter, Depends, Request, HTTPException, status, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -679,4 +681,202 @@ async def recalculate_artist_stats(
         "total_artists": len(artists),
         "updated": updated,
         "message": f"Recalculated stats for {len(artists)} artists ({updated} had stale counts)"
+    }
+
+
+# ---------------------------------------------------------------------------
+# Network ping check
+# ---------------------------------------------------------------------------
+
+# Validate host: allow hostnames, IPv4, IPv6 — reject anything shell-dangerous
+_SAFE_HOST_RE = re.compile(
+    r'^(?:'
+    r'(?:[a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)*[a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?'  # hostname
+    r'|(?:\d{1,3}\.){3}\d{1,3}'  # IPv4
+    r'|(?:[0-9a-fA-F:]{2,39})'   # IPv6
+    r')$'
+)
+
+
+@router.get("/admin/network/ping")
+@limiter.limit("30/minute")
+async def network_ping(
+    request: Request,
+    host: str = Query(..., description="Hostname or IP address to ping"),
+    count: int = Query(default=4, ge=1, le=10),
+    current_user: User = Depends(require_director),
+):
+    """
+    Perform an ICMP ping to the given host and return latency statistics.
+    Uses the system ping binary; director role required.
+    """
+    # Strip port if provided (e.g. "8.8.8.8:53" → "8.8.8.8")
+    host = host.split(":")[0].strip()
+    # Strip protocol prefix if present
+    for prefix in ("http://", "https://", "ftp://"):
+        if host.startswith(prefix):
+            host = host[len(prefix):]
+
+    if not _SAFE_HOST_RE.match(host):
+        raise HTTPException(status_code=400, detail="Invalid host format")
+
+    try:
+        result = subprocess.run(
+            ["ping", "-c", str(count), "-W", "2", host],
+            capture_output=True,
+            text=True,
+            timeout=count * 3 + 5,
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "host": host,
+            "reachable": False,
+            "packet_loss_percent": 100.0,
+            "rtt_min_ms": None,
+            "rtt_avg_ms": None,
+            "rtt_max_ms": None,
+            "packets_sent": count,
+            "packets_received": 0,
+            "error": "timeout",
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    output = result.stdout + result.stderr
+    reachable = result.returncode == 0
+
+    # Parse "X packets transmitted, Y received, Z% packet loss"
+    loss_match = re.search(r'(\d+)% packet loss', output)
+    packet_loss = float(loss_match.group(1)) if loss_match else (0.0 if reachable else 100.0)
+
+    tx_match = re.search(r'(\d+) packets? transmitted', output)
+    rx_match = re.search(r'(\d+) received', output)
+    packets_sent = int(tx_match.group(1)) if tx_match else count
+    packets_received = int(rx_match.group(1)) if rx_match else (count if reachable else 0)
+
+    # Parse RTT line: "rtt min/avg/max/mdev = 1.234/2.345/3.456/0.123 ms"
+    rtt_min = rtt_avg = rtt_max = None
+    rtt_match = re.search(r'min/avg/max(?:/mdev)? = ([\d.]+)/([\d.]+)/([\d.]+)', output)
+    if rtt_match:
+        rtt_min = float(rtt_match.group(1))
+        rtt_avg = float(rtt_match.group(2))
+        rtt_max = float(rtt_match.group(3))
+
+    return {
+        "host": host,
+        "reachable": reachable,
+        "packet_loss_percent": packet_loss,
+        "rtt_min_ms": rtt_min,
+        "rtt_avg_ms": rtt_avg,
+        "rtt_max_ms": rtt_max,
+        "packets_sent": packets_sent,
+        "packets_received": packets_received,
+        "error": None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Disk usage for a given mount point
+# ---------------------------------------------------------------------------
+
+# Allow only safe filesystem paths: absolute paths, no shell metacharacters
+_SAFE_PATH_RE = re.compile(r'^/[a-zA-Z0-9._/\-]*$')
+
+
+@router.get("/admin/disk/usage")
+@limiter.limit("60/minute")
+async def disk_usage(
+    request: Request,
+    path: str = Query(..., description="Absolute mount point path to check (e.g. /, /mnt/data)"),
+    current_user: User = Depends(require_director),
+):
+    """
+    Return disk usage statistics for the given mount point using psutil.
+    Director role required.
+    """
+    path = path.strip()
+    if not _SAFE_PATH_RE.match(path):
+        raise HTTPException(status_code=400, detail="Invalid path format")
+
+    try:
+        usage = psutil.disk_usage(path)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Path not found: {path}")
+    except PermissionError:
+        raise HTTPException(status_code=403, detail=f"Permission denied: {path}")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    def fmt(b: int) -> str:
+        for unit in ("B", "KB", "MB", "GB", "TB"):
+            if b < 1024:
+                return f"{b:.1f} {unit}"
+            b //= 1024
+        return f"{b:.1f} PB"
+
+    return {
+        "path": path,
+        "total_bytes": usage.total,
+        "used_bytes": usage.used,
+        "free_bytes": usage.free,
+        "percent": usage.percent,
+        "total_human": fmt(usage.total),
+        "used_human": fmt(usage.used),
+        "free_human": fmt(usage.free),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Job activity summary (last N days)
+# ---------------------------------------------------------------------------
+
+@router.get("/admin/jobs/activity-summary")
+@limiter.limit("60/minute")
+async def jobs_activity_summary(
+    request: Request,
+    days: int = Query(default=7, ge=1, le=90),
+    current_user: User = Depends(require_director),
+    db: Session = Depends(get_db),
+):
+    """
+    Return aggregate job counts for the last N days across all job tables.
+    Director role required.
+    """
+    from datetime import timedelta
+    from app.models.job_state import JobState, JobStatus as JSStatus
+    from app.models.file_organization_job import FileOrganizationJob, JobStatus as FOStatus
+    from app.models.library_import import LibraryImportJob
+
+    cutoff = __import__('datetime').datetime.now(__import__('datetime').timezone.utc) - timedelta(days=days)
+
+    def _counts(query, completed_val, failed_val):
+        total = query.count()
+        completed = query.filter_by(status=completed_val).count()
+        failed = query.filter_by(status=failed_val).count()
+        return total, completed, failed
+
+    # JobState
+    js_base = db.query(JobState).filter(JobState.created_at >= cutoff)
+    js_total, js_completed, js_failed = _counts(js_base, JSStatus.COMPLETED, JSStatus.FAILED)
+
+    # FileOrganizationJob
+    fo_base = db.query(FileOrganizationJob).filter(FileOrganizationJob.created_at >= cutoff)
+    fo_total, fo_completed, fo_failed = _counts(fo_base, FOStatus.COMPLETED, FOStatus.FAILED)
+
+    # LibraryImportJob — status stored as plain string
+    li_base = db.query(LibraryImportJob).filter(LibraryImportJob.created_at >= cutoff)
+    li_total = li_base.count()
+    li_completed = li_base.filter(LibraryImportJob.status == "completed").count()
+    li_failed = li_base.filter(LibraryImportJob.status == "failed").count()
+
+    total = js_total + fo_total + li_total
+    completed = js_completed + fo_completed + li_completed
+    failed = js_failed + fo_failed + li_failed
+
+    return {
+        "days": days,
+        "total": total,
+        "completed": completed,
+        "failed": failed,
+        "running": total - completed - failed,
     }

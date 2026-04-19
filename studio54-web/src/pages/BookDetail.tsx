@@ -8,6 +8,7 @@ import { usePlayer, type PlayerTrack } from '../contexts/PlayerContext'
 import { useAuth } from '../contexts/AuthContext'
 import FileBrowserModal from '../components/FileBrowserModal'
 import CoverArtUploader from '../components/CoverArtUploader'
+import SetLeadAuthorModal from '../components/SetLeadAuthorModal'
 import {
   FiArrowLeft,
   FiRefreshCw,
@@ -32,6 +33,7 @@ import {
   FiBookOpen,
   FiLink,
   FiRotateCcw,
+  FiStar,
 } from 'react-icons/fi'
 import { S54 } from '../assets/graphics'
 
@@ -59,6 +61,9 @@ interface BookWithChapters {
   monitored: boolean
   cover_art_url: string | null
   credit_name: string | null
+  co_authors: string[]
+  genre: string | null
+  description: string | null
   custom_folder_path: string | null
   chapter_count: number
   series_id: string | null
@@ -95,6 +100,9 @@ function BookDetail() {
   const [showEditMetadataModal, setShowEditMetadataModal] = useState(false)
   const [editMetaTitle, setEditMetaTitle] = useState('')
   const [editMetaAuthor, setEditMetaAuthor] = useState('')
+  const [editCoAuthors, setEditCoAuthors] = useState<string[]>([])
+  const [editCoAuthorInput, setEditCoAuthorInput] = useState('')
+  const [showSetLeadModal, setShowSetLeadModal] = useState(false)
   const [tagWriteJobId, setTagWriteJobId] = useState<string | null>(null)
 
   // Bulk chapter selection state
@@ -408,6 +416,40 @@ function BookDetail() {
     },
   })
 
+  // Set lead author mutation
+  const setLeadAuthorMutation = useMutation({
+    mutationFn: (leadName: string) => booksApi.setLeadAuthor(id!, leadName),
+    onSuccess: (data) => {
+      setShowSetLeadModal(false)
+      if (data.chapters_to_update > 0) {
+        toast.success(`"${data.lead_author}" set as lead — updating tags on ${data.chapters_to_update} file${data.chapters_to_update !== 1 ? 's' : ''}…`)
+        setTagWriteJobId(data.task_id)
+      } else {
+        toast.success(`"${data.lead_author}" set as lead author`)
+      }
+      queryClient.invalidateQueries({ queryKey: ['book', id] })
+      queryClient.invalidateQueries({ queryKey: ['reading-room-books'] })
+    },
+    onError: (err: any) => {
+      toast.error(err?.response?.data?.detail || 'Failed to set lead author')
+    },
+  })
+
+  const refreshMetadataMutation = useMutation({
+    mutationFn: () => booksApi.refreshMetadata(id!),
+    onSuccess: (data) => {
+      if (data.updated_fields.length > 0) {
+        toast.success(`Updated: ${data.updated_fields.join(', ')}`)
+      } else {
+        toast('No new metadata found', { icon: 'ℹ️' })
+      }
+      queryClient.invalidateQueries({ queryKey: ['book', id] })
+    },
+    onError: (err: any) => {
+      toast.error(err?.response?.data?.detail || 'Failed to refresh metadata')
+    },
+  })
+
   // Author search state for the edit modal
   const [editAuthorSearch, setEditAuthorSearch] = useState('')
   const [editAuthorResults, setEditAuthorResults] = useState<{ id: string; name: string }[]>([])
@@ -615,6 +657,8 @@ function BookDetail() {
                 onClick={() => {
                   setEditMetaTitle(book.title)
                   setEditMetaAuthor(book.credit_name || book.author_name || '')
+                  setEditCoAuthors(book.co_authors ?? [])
+                  setEditCoAuthorInput('')
                   setShowEditMetadataModal(true)
                 }}
                 className="mt-1 p-1.5 rounded text-gray-400 hover:text-[#FF1493] hover:bg-gray-100 dark:hover:bg-[#1C2128] transition-colors flex-shrink-0"
@@ -638,11 +682,26 @@ function BookDetail() {
           )}
 
           <button
-            className="text-lg md:text-xl text-[#FF1493] hover:text-[#d10f7a] mb-3 md:mb-4"
+            className="text-lg md:text-xl text-[#FF1493] hover:text-[#d10f7a]"
             onClick={() => navigate(`/reading-room/authors/${book.author_id}`)}
           >
             {book.credit_name || book.author_name}
           </button>
+
+          {/* Co-authors */}
+          {book.co_authors && book.co_authors.length > 0 && (
+            <div className="flex items-center flex-wrap gap-1.5 mt-1 mb-3 md:mb-4">
+              <span className="text-xs text-gray-500 dark:text-gray-400">with</span>
+              {book.co_authors.map((name, i) => (
+                <span
+                  key={i}
+                  className="text-xs px-2 py-0.5 rounded-full bg-gray-100 dark:bg-[#1C2128] text-gray-700 dark:text-gray-300"
+                >
+                  {name}
+                </span>
+              ))}
+            </div>
+          )}
 
           {/* Series Info */}
           {book.series_id && book.series_name && (
@@ -787,6 +846,50 @@ function BookDetail() {
                 </span>
               </div>
             </div>
+          </div>
+
+          {/* Synopsis / Description */}
+          <div className="mt-4">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400">Synopsis</h3>
+              {isDjOrAbove && (
+                <button
+                  className="btn btn-secondary btn-xs flex items-center gap-1"
+                  onClick={() => refreshMetadataMutation.mutate()}
+                  disabled={refreshMetadataMutation.isPending}
+                  title="Fetch description and genre from Hardcover / OpenLibrary"
+                >
+                  {refreshMetadataMutation.isPending
+                    ? <FiLoader className="w-3 h-3 animate-spin" />
+                    : <FiRefreshCw className="w-3 h-3" />}
+                  {refreshMetadataMutation.isPending ? 'Fetching…' : 'Refresh Metadata'}
+                </button>
+              )}
+            </div>
+            {book.description ? (
+              <div className="p-4 bg-gray-50 dark:bg-[#161B22] rounded-lg">
+                {book.genre && (
+                  <span className="inline-block mb-2 px-2 py-0.5 rounded text-xs bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300">
+                    {book.genre}
+                  </span>
+                )}
+                <p className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed whitespace-pre-line">
+                  {book.description}
+                </p>
+              </div>
+            ) : (
+              <div className="p-4 bg-gray-50 dark:bg-[#161B22] rounded-lg text-sm text-gray-400 dark:text-gray-500 italic flex items-center justify-between">
+                <span>No description available.</span>
+                {isDjOrAbove && !refreshMetadataMutation.isPending && (
+                  <button
+                    className="text-xs text-[#FF1493] hover:underline"
+                    onClick={() => refreshMetadataMutation.mutate()}
+                  >
+                    Fetch now
+                  </button>
+                )}
+              </div>
+            )}
           </div>
 
           {/* File Stats */}
@@ -1003,6 +1106,17 @@ function BookDetail() {
               </button>
             )}
 
+            {isDjOrAbove && book.co_authors && book.co_authors.length > 0 && (
+            <button
+              className="btn btn-secondary"
+              onClick={() => setShowSetLeadModal(true)}
+              title="Choose which author is the primary lead"
+            >
+              <FiStar className="w-4 h-4 mr-2" />
+              Set Lead Author
+            </button>
+            )}
+
             {isDjOrAbove && (
             <button
               className="btn btn-primary"
@@ -1122,6 +1236,15 @@ function BookDetail() {
                   >
                     <FiBookOpen className="w-4 h-4 mr-3" />
                     Play from Beginning
+                  </button>
+                  )}
+                  {isDjOrAbove && book.co_authors && book.co_authors.length > 0 && (
+                  <button
+                    className="w-full px-4 py-2.5 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#1C2128] flex items-center"
+                    onClick={() => { setShowSetLeadModal(true); setShowMobileActions(false) }}
+                  >
+                    <FiStar className="w-4 h-4 mr-3" />
+                    Set Lead Author
                   </button>
                   )}
                   {isDjOrAbove && (
@@ -1918,11 +2041,15 @@ function BookDetail() {
             <form
               onSubmit={(e) => {
                 e.preventDefault()
-                const payload: { title?: string; author_name?: string; author_id?: string } = {}
+                const payload: { title?: string; author_name?: string; author_id?: string; co_authors?: string[] } = {}
                 if (editMetaTitle.trim() && editMetaTitle.trim() !== book.title) payload.title = editMetaTitle.trim()
                 if (editMetaAuthor.trim() && editMetaAuthor.trim() !== (book.credit_name || book.author_name)) payload.author_name = editMetaAuthor.trim()
                 if (editSelectedAuthor && editSelectedAuthor.id !== book.author_id) payload.author_id = editSelectedAuthor.id
-                if (!payload.title && !payload.author_name && !payload.author_id) {
+                // Always include co_authors so clearing is supported
+                const origCo = JSON.stringify([...(book.co_authors ?? [])].sort())
+                const newCo = JSON.stringify([...editCoAuthors].sort())
+                if (origCo !== newCo) payload.co_authors = editCoAuthors
+                if (!payload.title && !payload.author_name && !payload.author_id && payload.co_authors === undefined) {
                   toast('No changes detected', { icon: 'ℹ️' })
                   return
                 }
@@ -2000,6 +2127,70 @@ function BookDetail() {
                 </p>
               </div>
 
+              {/* Co-Authors */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Co-Authors
+                  <span className="ml-1 font-normal text-gray-400">(optional)</span>
+                </label>
+                {/* Tag chips */}
+                {editCoAuthors.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 mb-2">
+                    {editCoAuthors.map((name, i) => (
+                      <span
+                        key={i}
+                        className="flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-gray-100 dark:bg-[#1C2128] text-gray-800 dark:text-gray-200"
+                      >
+                        {name}
+                        <button
+                          type="button"
+                          onClick={() => setEditCoAuthors(editCoAuthors.filter((_, j) => j !== i))}
+                          className="text-gray-400 hover:text-red-500 transition-colors"
+                        >
+                          <FiX className="w-3 h-3" />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={editCoAuthorInput}
+                    onChange={(e) => setEditCoAuthorInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if ((e.key === 'Enter' || e.key === ',') && editCoAuthorInput.trim()) {
+                        e.preventDefault()
+                        const name = editCoAuthorInput.trim().replace(/,$/, '')
+                        if (name && !editCoAuthors.includes(name)) {
+                          setEditCoAuthors([...editCoAuthors, name])
+                        }
+                        setEditCoAuthorInput('')
+                      }
+                    }}
+                    className="flex-1 rounded-lg border border-gray-300 dark:border-[#30363D] bg-white dark:bg-[#0D1117] text-gray-900 dark:text-white px-3 py-2 text-sm focus:outline-none focus:border-[#FF1493]"
+                    placeholder="Type a name and press Enter"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const name = editCoAuthorInput.trim()
+                      if (name && !editCoAuthors.includes(name)) {
+                        setEditCoAuthors([...editCoAuthors, name])
+                      }
+                      setEditCoAuthorInput('')
+                    }}
+                    disabled={!editCoAuthorInput.trim()}
+                    className="px-3 py-2 rounded-lg bg-gray-100 dark:bg-[#1C2128] text-gray-700 dark:text-gray-300 text-sm hover:bg-gray-200 dark:hover:bg-[#30363D] disabled:opacity-40 transition-colors"
+                  >
+                    Add
+                  </button>
+                </div>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  Co-authors are searchable but the main author tag in files is unchanged.
+                </p>
+              </div>
+
               <div className="flex gap-3 pt-1">
                 <button
                   type="submit"
@@ -2020,6 +2211,18 @@ function BookDetail() {
             </form>
           </div>
         </div>
+      )}
+
+      {/* Set Lead Author Modal */}
+      {showSetLeadModal && book && (
+        <SetLeadAuthorModal
+          bookTitle={book.title}
+          currentAuthorName={book.credit_name || book.author_name || ''}
+          coAuthors={book.co_authors ?? []}
+          onClose={() => setShowSetLeadModal(false)}
+          onConfirm={(leadName) => setLeadAuthorMutation.mutate(leadName)}
+          isPending={setLeadAuthorMutation.isPending}
+        />
       )}
     </div>
   )

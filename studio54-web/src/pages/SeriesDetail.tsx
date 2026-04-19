@@ -493,9 +493,17 @@ function SeriesDetail() {
             uploadFn={seriesApi.uploadCoverArt}
             uploadFromUrlFn={seriesApi.uploadCoverArtFromUrl}
             fallback={
-              <div className="w-full h-full bg-gradient-to-br from-[#FF1493] to-[#FF8C00] flex items-center justify-center">
-                <FiBookOpen className="w-24 h-24 text-white/30" />
-              </div>
+              series.books?.[0]?.cover_art_url ? (
+                <img
+                  src={`/api/v1/books/${series.books[0].id}/cover-art`}
+                  alt={series.books[0].title}
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                <div className="w-full h-full bg-gradient-to-br from-[#FF1493] to-[#FF8C00] flex items-center justify-center">
+                  <FiBookOpen className="w-24 h-24 text-white/30" />
+                </div>
+              )
             }
             alt={series.name}
             className="w-28 h-28 sm:w-48 sm:h-48 rounded-lg overflow-hidden flex-shrink-0"

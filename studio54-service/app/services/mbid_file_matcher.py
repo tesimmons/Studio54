@@ -18,6 +18,43 @@ from app.models.artist import Artist
 logger = logging.getLogger(__name__)
 
 
+def _score_album_type(album) -> int:
+    """
+    Score an album based on its primary and secondary types.
+
+    Preference: Original Studio Album > EP/Single > Live > Compilation > Remix
+    Higher score = more desirable match target.
+    """
+    if album is None:
+        return 0
+
+    secondary = (album.secondary_types or "").lower()
+    primary = (album.album_type or "").lower()
+
+    SECONDARY_PENALTIES = {
+        "remix":          -300,
+        "compilation":    -200,
+        "live":           -150,
+        "mixtape/street": -300,
+        "dj-mix":         -300,
+        "demo":           -100,
+        "interview":      -100,
+        "spokenword":     -100,
+    }
+
+    score = 0
+    for keyword, penalty in SECONDARY_PENALTIES.items():
+        if keyword in secondary:
+            score += penalty
+
+    # Only apply primary-type bonus when no secondary penalty was applied
+    if score == 0:
+        PRIMARY_SCORES = {"album": 100, "ep": 60, "single": 40, "broadcast": 20}
+        score += PRIMARY_SCORES.get(primary, 50)
+
+    return score
+
+
 class MBIDFileMatcher:
     """
     Service for matching library files to tracks using MBID from comment fields
@@ -133,12 +170,11 @@ class MBIDFileMatcher:
 
             def _score(t):
                 score = 0
-                # Release Group MBID match (+1000)
+                # Release Group MBID exact match is the strongest signal
                 if file_rg_mbid and t.album and t.album.musicbrainz_id == file_rg_mbid:
                     score += 1000
-                # Non-compilation preference (+50)
-                if t.album and not (t.album.secondary_types and 'compilation' in t.album.secondary_types.lower()):
-                    score += 50
+                # Graduated album-type scoring (prefers original studio albums)
+                score += _score_album_type(t.album)
                 return score
 
             track = max(candidates, key=_score)
@@ -234,15 +270,11 @@ class MBIDFileMatcher:
         # Track album match counts for cohort-aware scoring
         album_match_counts = defaultdict(int)
 
-        def _is_compilation(album):
-            return album and album.secondary_types and 'compilation' in album.secondary_types.lower()
-
         def _score_track(track, file_rg_mbid, use_cohort=True):
             score = 0
             if file_rg_mbid and track.album and track.album.musicbrainz_id == file_rg_mbid:
                 score += 1000
-            if not _is_compilation(track.album):
-                score += 50
+            score += _score_album_type(track.album)
             if use_cohort and track.album:
                 score += album_match_counts.get(str(track.album_id), 0)
             return score

@@ -1,7 +1,7 @@
 import React, { useMemo, useCallback } from 'react'
 import { ResponsiveGridLayout, useContainerWidth, verticalCompactor } from 'react-grid-layout'
 import type { LayoutItem, Layout, ResponsiveLayouts } from 'react-grid-layout'
-import { WIDGET_MAP } from './widgetRegistry'
+import { getWidgetDef } from './widgetRegistry'
 import WidgetWrapper from './WidgetWrapper'
 import type { DashboardLayoutItem } from '../../types'
 import { useAuth } from '../../contexts/AuthContext'
@@ -12,6 +12,8 @@ interface DashboardGridProps {
   isEditMode: boolean
   onLayoutChange: (layout: LayoutItem[]) => void
   onHideWidget: (id: string) => void
+  widgetSettings: Record<string, Record<string, unknown>>
+  onWidgetSettingsChange: (instanceId: string, settings: Record<string, unknown>) => void
 }
 
 const BREAKPOINTS = { lg: 1200, md: 996, sm: 768, xs: 480 }
@@ -23,6 +25,8 @@ export default function DashboardGrid({
   isEditMode,
   onLayoutChange,
   onHideWidget,
+  widgetSettings,
+  onWidgetSettingsChange,
 }: DashboardGridProps) {
   const { isDirector } = useAuth()
   const { width, containerRef, mounted } = useContainerWidth()
@@ -31,7 +35,7 @@ export default function DashboardGrid({
     const hiddenSet = new Set(hiddenWidgets)
     return layouts.filter((item) => {
       if (hiddenSet.has(item.i)) return false
-      const widget = WIDGET_MAP.get(item.i)
+      const widget = getWidgetDef(item.i)
       if (!widget) return false
       if (widget.requiredRole === 'director' && !isDirector) return false
       return true
@@ -94,9 +98,10 @@ export default function DashboardGrid({
           margin={[16, 16] as const}
         >
           {visibleWidgets.map((item) => {
-            const widget = WIDGET_MAP.get(item.i)
+            const widget = getWidgetDef(item.i)
             if (!widget) return null
             const Component = widget.component
+            const instanceSettings = widgetSettings[item.i]
             return (
               <div key={item.i}>
                 <WidgetWrapper
@@ -105,7 +110,13 @@ export default function DashboardGrid({
                   isEditMode={isEditMode}
                   onHide={onHideWidget}
                 >
-                  <Component widgetId={item.i} isEditMode={isEditMode} libraryType={widget.libraryType} />
+                  <Component
+                    widgetId={item.i}
+                    isEditMode={isEditMode}
+                    libraryType={widget.libraryType}
+                    widgetSettings={instanceSettings}
+                    onSettingsChange={(s) => onWidgetSettingsChange(item.i, s)}
+                  />
                 </WidgetWrapper>
               </div>
             )

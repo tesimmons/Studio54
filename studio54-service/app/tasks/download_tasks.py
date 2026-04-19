@@ -40,6 +40,39 @@ def get_db() -> Session:
     return SessionLocal()
 
 
+def _verify_album_files(db: Session, album) -> dict:
+    """
+    Check each linked track's file_path exists on disk.
+    Clears has_file on missing files and returns counts.
+    Does NOT commit — caller is responsible.
+    """
+    from pathlib import Path
+    broken = []
+    for track in album.tracks:
+        if track.has_file:
+            if not track.file_path or not Path(track.file_path).exists():
+                track.has_file = False
+                track.file_path = None
+                broken.append(track.id)
+    return {"broken": len(broken)}
+
+
+def _verify_and_set_album_status(db: Session, album) -> None:
+    """
+    After import or verification, set album.status based on actual linked track count.
+    Does NOT commit — caller must commit after calling this.
+    """
+    _verify_album_files(db, album)
+    total = len(album.tracks)
+    linked = sum(1 for t in album.tracks if t.has_file)
+    if total > 0 and linked == total:
+        album.status = AlbumStatus.DOWNLOADED
+    elif linked > 0:
+        album.status = AlbumStatus.DOWNLOADING
+    else:
+        album.status = AlbumStatus.FAILED
+
+
 def _get_attempted_guids_for_album(db: Session, album_id: str) -> set:
     """Get all NZB GUIDs that have been attempted for this album (across all downloads)"""
     downloads = db.query(DownloadQueue).filter(DownloadQueue.album_id == album_id).all()
@@ -754,18 +787,36 @@ def import_download(download_id: str):
 
         if result["success"]:
             download.status = DownloadStatus.COMPLETED
-            album.status = AlbumStatus.DOWNLOADED
 
             if result.get("imported_files"):
                 from app.models.track import Track
+                import uuid as _uuid
                 for import_info in result["imported_files"]:
-                    track = db.query(Track).filter(
-                        Track.album_id == album.id,
-                        Track.has_file == False
-                    ).first()
+                    track = None
+                    # Prefer exact match by track_id returned from import
+                    tid = import_info.get("track_id")
+                    if tid:
+                        try:
+                            track = db.query(Track).filter(
+                                Track.id == _uuid.UUID(tid)
+                            ).first()
+                        except (ValueError, Exception):
+                            pass
+                    # Fall back: match by track_number
+                    if track is None and import_info.get("track_number"):
+                        track = db.query(Track).filter(
+                            Track.album_id == album.id,
+                            Track.track_number == import_info["track_number"],
+                        ).first()
                     if track:
-                        track.file_path = import_info["destination"]
+                        track.file_path = import_info["destination"]  # already absolute
                         track.has_file = True
+
+            db.flush()
+
+            # Verify files on disk and set album status based on actual link count
+            db.refresh(album)
+            _verify_and_set_album_status(db, album)
 
             db.commit()
 
@@ -900,6 +951,42 @@ def import_download(download_id: str):
         except:
             pass
         return {"success": False, "error": str(e)}
+    finally:
+        db.close()
+
+
+# ==================== FILE VERIFICATION ====================
+
+@shared_task(name="app.tasks.download_tasks.verify_downloaded_files")
+def verify_downloaded_files():
+    """
+    Scan all DOWNLOADED albums and confirm each linked track's file exists on disk.
+    Resets missing tracks to has_file=False and demotes album status to WANTED/DOWNLOADING/FAILED.
+    Runs daily via beat schedule and can be triggered on demand via API.
+    """
+    db = get_db()
+    try:
+        albums = db.query(Album).filter(Album.status == AlbumStatus.DOWNLOADED).all()
+        stats = {"albums_checked": 0, "albums_reset": 0, "tracks_cleared": 0}
+
+        for album in albums:
+            stats["albums_checked"] += 1
+            result = _verify_album_files(db, album)
+            if result["broken"] > 0:
+                stats["tracks_cleared"] += result["broken"]
+                stats["albums_reset"] += 1
+                _verify_and_set_album_status(db, album)
+                db.commit()
+
+        logger.info(
+            f"[verify_downloaded_files] checked={stats['albums_checked']} "
+            f"reset={stats['albums_reset']} tracks_cleared={stats['tracks_cleared']}"
+        )
+        return stats
+    except Exception as e:
+        logger.error(f"[verify_downloaded_files] failed: {e}", exc_info=True)
+        db.rollback()
+        raise
     finally:
         db.close()
 
