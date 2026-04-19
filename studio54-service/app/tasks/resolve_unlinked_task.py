@@ -107,7 +107,7 @@ def resolve_unlinked_files_task(self, job_id: str, library_path_id: str = None):
             "phase1_albums_imported": 0,
             "phase1_tracks_created": 0,
             "phase1_files_linked": 0,
-            "phase1b_tracks_created": 0,
+            "phase1b_albums_created": 0,
             "phase1b_files_linked": 0,
             "phase2_rg_mbids_found": 0,
             "phase2_albums_imported": 0,
@@ -248,7 +248,7 @@ def resolve_unlinked_files_task(self, job_id: str, library_path_id: str = None):
         job_logger.log_info(f"Phase 1  — Albums imported: {stats['phase1_albums_imported']}")
         job_logger.log_info(f"Phase 1  — Tracks created: {stats['phase1_tracks_created']}")
         job_logger.log_info(f"Phase 1  — Files linked: {stats['phase1_files_linked']}")
-        job_logger.log_info(f"Phase 1B — Tracks created (alt releases): {stats['phase1b_tracks_created']}")
+        job_logger.log_info(f"Phase 1B — Albums created (alt releases): {stats['phase1b_albums_created']}")
         job_logger.log_info(f"Phase 1B — Files linked: {stats['phase1b_files_linked']}")
         job_logger.log_info(f"Phase 2  — RG MBIDs found: {stats['phase2_rg_mbids_found']}")
         job_logger.log_info(f"Phase 2  — Albums imported: {stats['phase2_albums_imported']}")
