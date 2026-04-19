@@ -35,8 +35,9 @@ class Album(Base):
 
     # Basic info
     title = Column(Text, nullable=False, index=True)
-    musicbrainz_id = Column(String(36), unique=True, nullable=False, index=True)  # Release group MBID
-    release_mbid = Column(String(36), nullable=True, index=True)  # Specific release MBID
+    musicbrainz_id = Column(String(100), unique=True, nullable=False, index=True)  # Release MBID (or RG MBID for wanted stubs / legacy)
+    release_mbid = Column(String(36), nullable=True, index=True)  # Specific release MBID (alias of musicbrainz_id for per-release albums)
+    release_group_mbid = Column(String(36), nullable=True, index=True)  # Parent release group MBID
 
     # Release metadata
     release_date = Column(Date, nullable=True)
@@ -53,6 +54,9 @@ class Album(Base):
 
     # Custom folder path (overrides default Artist/Album structure)
     custom_folder_path = Column(Text, nullable=True)  # Custom directory path for this album's files
+
+    # Stub flag — True for synthetic records created from metadata when no MB match exists
+    is_stub = Column(Boolean, nullable=False, default=False, server_default='false')
 
     # Search and quality tracking
     last_search_time = Column(DateTime(timezone=True), nullable=True)

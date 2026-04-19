@@ -22,6 +22,7 @@ from app.models.media_management import MediaManagementConfig
 from app.models.library_import import LibraryImportJob, LibraryArtistMatch
 from app.models.notification import NotificationProfile, NotificationEvent, NotificationProvider
 from app.models.unlinked_file import UnlinkedFile
+from app.models.file_organization_job import FileOrganizationJob
 from app.models.dj_request import DjRequest
 from app.models.scheduled_job import ScheduledJob, ScheduleFrequency
 from app.models.storage_mount import StorageMount, MountType, MountStatus
@@ -75,6 +76,7 @@ __all__ = [
     "NotificationEvent",
     "NotificationProvider",
     "UnlinkedFile",
+    "FileOrganizationJob",
     "DjRequest",
     "ScheduledJob",
     "ScheduleFrequency",
