@@ -489,9 +489,16 @@ def _process_single_album(db: Session, artist, rg, idx, total_albums, mb_client)
                 album.muse_verified = True
                 logger.info(f"Album '{album.title}' found in MUSE library ({file_count} files)")
             else:
-                studio54_file_count = db.query(LibraryFile).filter(
-                    LibraryFile.musicbrainz_releasegroupid == album.musicbrainz_id
-                ).count()
+                # Per-release albums: match by release MBID; stubs/legacy: match by RG MBID
+                is_per_release = bool(album.release_group_mbid and album.musicbrainz_id != album.release_group_mbid)
+                if is_per_release:
+                    studio54_file_count = db.query(LibraryFile).filter(
+                        LibraryFile.musicbrainz_albumid == album.musicbrainz_id
+                    ).count()
+                else:
+                    studio54_file_count = db.query(LibraryFile).filter(
+                        LibraryFile.musicbrainz_releasegroupid == album.musicbrainz_id
+                    ).count()
                 if studio54_file_count >= min_track_count:
                     album.status = AlbumStatus.DOWNLOADED
                     logger.info(f"Album '{album.title}' found in Studio54 library ({studio54_file_count} files)")
