@@ -150,3 +150,46 @@ def test_album_model_has_release_group_mbid_field(db_session):
     assert fetched.release_group_mbid == rg_mbid
     assert fetched.release_mbid == rel_mbid
     assert fetched.musicbrainz_id == rel_mbid
+
+
+def test_get_album_api_includes_release_group_mbid(client, db_session):
+    """GET /albums/{id} response must include release_group_mbid."""
+    from app.models.user import User, UserRole
+    from app.auth import create_access_token, hash_password
+
+    # Create a test user so the auth dependency can resolve
+    user = User(
+        id=uuid.uuid4(),
+        username="testuser_rg",
+        password_hash=hash_password("testpass"),
+        role=UserRole.DIRECTOR,
+        is_active=True,
+    )
+    db_session.add(user)
+
+    artist = Artist(id=uuid.uuid4(), name="API Test Artist", musicbrainz_id=str(uuid.uuid4()))
+    db_session.add(artist)
+
+    rg_mbid = str(uuid.uuid4())
+    rel_mbid = str(uuid.uuid4())
+    album = Album(
+        id=uuid.uuid4(),
+        artist_id=artist.id,
+        title="API Test Album",
+        musicbrainz_id=rel_mbid,
+        release_mbid=rel_mbid,
+        release_group_mbid=rg_mbid,
+        status=AlbumStatus.DOWNLOADED,
+    )
+    db_session.add(album)
+    db_session.commit()
+
+    token = create_access_token(str(user.id), user.username, user.role)
+    response = client.get(
+        f"/api/v1/albums/{album.id}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert "release_group_mbid" in data
+    assert data["release_group_mbid"] == rg_mbid
