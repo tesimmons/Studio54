@@ -33,6 +33,7 @@ from app.models.track import Track
 from app.models.media_management import MediaManagementConfig
 from app.shared_services.job_logger import JobLogger
 from app.tasks.organization_tasks import BackgroundHeartbeat
+from app.services.musicbrainz_client import get_musicbrainz_client
 
 logger = logging.getLogger(__name__)
 
@@ -396,121 +397,100 @@ def _phase1_auto_import(db, job, job_logger, path_filter, bulk_params):
 
 def _phase1b_create_missing_tracks(db, job, job_logger, path_filter, bulk_params):
     """
-    Phase 1B: Create tracks for files where the album exists but the file's recording
-    MBID isn't in the tracks table.
+    Phase 1B: For files with a release MBID (musicbrainz_albumid) not yet in albums,
+    create a proper per-release album via import_release() and link the file to it.
 
-    This happens when MusicBrainz has multiple releases of the same release group
-    (e.g. original vs remaster vs deluxe) with different recording MBIDs. The album
-    importer picks one release, so files tagged from alternate releases have recording
-    MBIDs that don't match any imported track.
-
-    Solution: Create a new Track record under the existing album using the file's
-    metadata and recording MBID, then link the file to it.
+    Previously this dumped cross-release tracks into the release-group stub, causing
+    duplicate track numbers. Now each release gets its own album record.
     """
-    import uuid as uuid_mod
+    from app.services.album_importer import import_release
 
     stats = {
-        "phase1b_tracks_created": 0,
+        "phase1b_albums_created": 0,
         "phase1b_files_linked": 0,
     }
 
-    # Find files where:
-    # - Has recording MBID with no matching track
-    # - Has RG MBID matching an existing album
-    # - Artist is in DB
+    # Find files that have:
+    # - a release MBID (musicbrainz_albumid) not matching any album's musicbrainz_id
+    # - a release group MBID matching an existing album (so the artist is known)
+    # - artist present in DB (matched by MBID tag or by name)
     sql = text(f"""
-        SELECT
-            lf.id AS file_id,
-            lf.file_path,
-            lf.title AS file_title,
-            lf.track_number,
-            lf.disc_number,
-            lf.musicbrainz_trackid AS recording_mbid,
+        SELECT DISTINCT
+            lf.musicbrainz_albumid AS release_mbid,
             lf.musicbrainz_releasegroupid AS rg_mbid,
-            al.id AS album_id,
-            al.title AS album_title
+            al.artist_id AS artist_id
         FROM library_files lf
-        JOIN artists a ON a.musicbrainz_id = lf.musicbrainz_artistid
         JOIN albums al ON al.musicbrainz_id = lf.musicbrainz_releasegroupid
-        LEFT JOIN tracks t ON t.musicbrainz_id = lf.musicbrainz_trackid
-        WHERE lf.musicbrainz_trackid IS NOT NULL
-          AND lf.musicbrainz_trackid != ''
-          AND t.id IS NULL
+        LEFT JOIN albums existing ON existing.musicbrainz_id = lf.musicbrainz_albumid
+        WHERE lf.musicbrainz_albumid IS NOT NULL
+          AND lf.musicbrainz_albumid != ''
           AND lf.musicbrainz_releasegroupid IS NOT NULL
           AND lf.musicbrainz_releasegroupid != ''
+          AND existing.id IS NULL
           {path_filter}
-        ORDER BY al.id, lf.disc_number, lf.track_number
     """)
     rows = db.execute(sql, bulk_params).fetchall()
 
     if not rows:
-        job_logger.log_info("Phase 1B: No files with existing albums need track creation")
+        job_logger.log_info("Phase 1B: No files with unknown release MBIDs found")
         return stats
 
-    job_logger.log_info(f"Phase 1B: Found {len(rows)} files with existing albums but missing tracks")
+    job_logger.log_info(f"Phase 1B: Found {len(rows)} release MBIDs needing new album records")
 
-    # Track which recording MBIDs we've already created to avoid duplicates
-    # (multiple files could have the same recording MBID)
-    created_recording_mbids = set()
+    mb_client = get_musicbrainz_client()
     total = len(rows)
 
     for i, row in enumerate(rows):
-        if i % 500 == 0 and i > 0:
-            job.current_action = f"Phase 1B: Creating tracks {i}/{total}"
-            job.progress_percent = 20 + (i / total) * 15  # Phase 1B = 20-35%
+        if i % 50 == 0 and i > 0:
+            job.current_action = f"Phase 1B: Creating release albums {i}/{total}"
+            job.progress_percent = 20 + (i / total) * 15
             try:
                 db.commit()
             except Exception:
                 pass
 
-        recording_mbid = row.recording_mbid
-
-        # Skip if we already created a track for this recording MBID in this run
-        if recording_mbid in created_recording_mbids:
-            continue
-
-        # Double-check the track doesn't exist (could have been created by Phase 1)
-        existing = db.query(Track).filter(
-            Track.musicbrainz_id == recording_mbid
-        ).first()
-        if existing:
-            # Track exists now — just link the file if it's not already linked
-            if not existing.has_file:
-                existing.file_path = row.file_path
-                existing.has_file = True
-                stats["phase1b_files_linked"] += 1
-            created_recording_mbids.add(recording_mbid)
-            continue
-
-        # Create the track under the existing album
-        track = Track(
-            id=uuid_mod.uuid4(),
-            album_id=row.album_id,
-            title=row.file_title or "Unknown Track",
-            musicbrainz_id=recording_mbid,
-            track_number=row.track_number,
-            disc_number=row.disc_number or 1,
-            duration_ms=None,
-            has_file=True,
-            file_path=row.file_path,
-        )
-        db.add(track)
-        created_recording_mbids.add(recording_mbid)
-        stats["phase1b_tracks_created"] += 1
-        stats["phase1b_files_linked"] += 1
-
-        if stats["phase1b_tracks_created"] % 200 == 0:
-            db.flush()
+        try:
+            album = import_release(
+                db=db,
+                release_mbid=row.release_mbid,
+                release_group_mbid=row.rg_mbid,
+                artist_id=row.artist_id,
+                mb_client=mb_client,
+            )
+            if album:
+                stats["phase1b_albums_created"] += 1
+                linked = _link_files_for_release(db, album)
+                stats["phase1b_files_linked"] += linked
+        except Exception as e:
+            job_logger.log_info(f"Phase 1B: Failed to import release {row.release_mbid}: {e}")
 
     db.commit()
     _mark_resolved_files(db, job_logger)
 
     job_logger.log_info(
-        f"Phase 1B: Created {stats['phase1b_tracks_created']} tracks, "
+        f"Phase 1B: Created {stats['phase1b_albums_created']} albums, "
         f"linked {stats['phase1b_files_linked']} files"
     )
-    job_logger.log_phase_complete("Phase 1B", count=stats["phase1b_tracks_created"])
+    job_logger.log_phase_complete("Phase 1B", count=stats["phase1b_albums_created"])
     return stats
+
+
+def _link_files_for_release(db, album) -> int:
+    """Link library files to their matching tracks within a newly-created release album."""
+    linked = 0
+    tracks = db.query(Track).filter(Track.album_id == album.id).all()
+    for track in tracks:
+        if track.has_file:
+            continue
+        lf = db.query(LibraryFile).filter(
+            LibraryFile.musicbrainz_trackid == track.musicbrainz_id,
+            LibraryFile.musicbrainz_albumid == album.musicbrainz_id,
+        ).first()
+        if lf:
+            track.has_file = True
+            track.file_path = lf.file_path
+            linked += 1
+    return linked
 
 
 def _phase2_populate_rg_mbids(db, job, job_logger, path_filter, bulk_params):
