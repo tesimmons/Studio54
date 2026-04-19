@@ -139,27 +139,31 @@ def run_migration(db: Session) -> dict:
     stats = {"stub": 0, "converted": 0, "split": 0, "legacy": 0,
              "already_done": 0, "errors": 0}
 
-    offset = 0
+    processed = 0
     while True:
         batch = db.query(Album).filter(
             Album.release_group_mbid.is_(None)
-        ).limit(BATCH_SIZE).offset(offset).all()
+        ).limit(BATCH_SIZE).all()
 
         if not batch:
             break
 
         for album in batch:
+            album_id = str(album.id)
+            album_mbid = album.musicbrainz_id
+            sp = db.begin_nested()
             try:
                 result = migrate_album(db, album)
+                sp.commit()
                 stats[result] = stats.get(result, 0) + 1
             except Exception as e:
-                logger.error(f"Error migrating album {album.id} ({album.musicbrainz_id}): {e}")
+                sp.rollback()
+                logger.error(f"Error migrating album {album_id} ({album_mbid}): {e}")
                 stats["errors"] += 1
-                db.rollback()
 
         db.commit()
-        offset += BATCH_SIZE
-        logger.info(f"Processed {offset} albums... {stats}")
+        processed += len(batch)
+        logger.info(f"Processed {processed} albums... {stats}")
 
     return stats
 
