@@ -46,130 +46,119 @@ def import_release_group(
     mb_client: MusicBrainzClient,
 ) -> Optional[Album]:
     """
-    Import a single release group as an Album + Tracks from MusicBrainz.
+    Import a release group as a WANTED stub Album (no tracks).
 
-    Reuses the exact pattern from sync_artist_albums_standalone:
-    1. Check if album already exists (idempotent)
-    2. Fetch release group metadata
-    3. Create Album record (status=WANTED)
-    4. select_best_release() to pick the canonical release
-    5. Fetch tracks from that release, create Track records
-
-    Args:
-        db: Database session
-        artist_id: Artist UUID
-        release_group_mbid: MusicBrainz release group MBID
-        mb_client: MusicBrainz client instance
-
-    Returns:
-        The created Album, or None if it already exists or import fails.
+    Tracks belong to specific releases — call import_release() when a file
+    with a known release MBID needs a proper album record.
     """
-    # Skip if album with this musicbrainz_id already exists
     existing = db.query(Album).filter(Album.musicbrainz_id == release_group_mbid).first()
     if existing:
-        # Backfill tracks if album has zero tracks (recovery from broken sync)
-        existing_track_count = db.query(Track).filter(Track.album_id == existing.id).count()
-        if existing_track_count == 0:
-            tracks_added = _import_tracks_for_album(db, existing, release_group_mbid, mb_client)
-            if tracks_added > 0:
-                logger.info(f"Backfilled {tracks_added} tracks for existing album: {existing.title}")
         return None
 
-    # Fetch release group metadata
     rg = mb_client.get_release_group(release_group_mbid)
     if not rg:
         logger.warning(f"Could not fetch release group {release_group_mbid}")
         return None
 
-    # Create Album record
     secondary_types_list = rg.get("secondary-types", [])
     album = Album(
         artist_id=artist_id,
         title=rg.get("title", "Unknown Album"),
         musicbrainz_id=release_group_mbid,
+        release_group_mbid=release_group_mbid,
+        release_mbid=None,
         album_type=rg.get("primary-type", "Album"),
         secondary_types=",".join(secondary_types_list) if secondary_types_list else None,
         status=AlbumStatus.WANTED,
     )
-
-    # Parse release date
     album.release_date = _parse_mb_date(rg.get("first-release-date"))
-
     db.add(album)
-    db.flush()  # Get album.id without committing
-
-    # Import tracks
-    tracks_added = _import_tracks_for_album(db, album, release_group_mbid, mb_client)
+    db.flush()
 
     logger.info(
-        f"Imported release group '{album.title}' ({release_group_mbid}) "
-        f"with {tracks_added} tracks for artist {artist_id}"
+        f"Imported release group stub '{album.title}' ({release_group_mbid}) "
+        f"for artist {artist_id}"
     )
     return album
 
 
-def _import_tracks_for_album(
+def import_release(
     db: Session,
-    album: Album,
+    release_mbid: str,
     release_group_mbid: str,
+    artist_id: UUID,
     mb_client: MusicBrainzClient,
-) -> int:
+    title: Optional[str] = None,
+    album_type: Optional[str] = None,
+    release_date: Optional[date] = None,
+) -> Optional[Album]:
     """
-    Import tracks for an album from MusicBrainz.
+    Import a specific release as an Album + Tracks from MusicBrainz.
 
-    Selects the best release and creates Track records.
-
-    Returns:
-        Number of tracks added.
+    Creates an album keyed by release MBID (not release group MBID) so that
+    separate editions of the same album get separate records.
     """
+    existing = db.query(Album).filter(Album.musicbrainz_id == release_mbid).first()
+    if existing:
+        return None
+
+    release = mb_client.get_release(release_mbid)
+    if not release:
+        logger.warning(f"Could not fetch release {release_mbid}")
+        return None
+
+    rg = release.get("release-group", {})
+    resolved_title = title or rg.get("title") or release.get("title", "Unknown Album")
+    resolved_type = album_type or rg.get("primary-type", "Album")
+    resolved_date = release_date or _parse_mb_date(release.get("date"))
+
+    album = Album(
+        artist_id=artist_id,
+        title=resolved_title,
+        musicbrainz_id=release_mbid,
+        release_mbid=release_mbid,
+        release_group_mbid=release_group_mbid,
+        album_type=resolved_type,
+        status=AlbumStatus.DOWNLOADED,
+        release_date=resolved_date,
+    )
+    db.add(album)
+    db.flush()
+
     tracks_added = 0
-    try:
-        release = mb_client.select_best_release(release_group_mbid)
-        if not release:
-            return 0
+    media_list = release.get("media", [])
+    for media in media_list:
+        disc_number = media.get("position", 1)
+        for track_data in media.get("tracks", []):
+            recording = track_data.get("recording", {})
+            recording_mbid = recording.get("id")
+            if not recording_mbid:
+                continue
+            existing_track = db.query(Track).filter(
+                Track.musicbrainz_id == recording_mbid,
+                Track.album_id == album.id,
+            ).first()
+            if not existing_track:
+                db.add(Track(
+                    album_id=album.id,
+                    title=recording.get("title") or track_data.get("title", "Unknown Track"),
+                    musicbrainz_id=recording_mbid,
+                    track_number=track_data.get("position", 0),
+                    disc_number=disc_number,
+                    duration_ms=recording.get("length"),
+                    has_file=False,
+                ))
+                tracks_added += 1
 
-        release_mbid = release.get("id")
-        if release_mbid and not album.release_mbid:
-            album.release_mbid = release_mbid
+    total_tracks = sum(len(m.get("tracks", [])) for m in media_list)
+    album.track_count = total_tracks
+    db.flush()
 
-        media_list = release.get("media", [])
-        for media in media_list:
-            disc_number = media.get("position", 1)
-            for track_data in media.get("tracks", []):
-                recording = track_data.get("recording", {})
-                recording_mbid = recording.get("id")
-
-                if not recording_mbid:
-                    continue
-
-                # Check if track already exists for this album
-                existing_track = db.query(Track).filter(
-                    Track.musicbrainz_id == recording_mbid,
-                    Track.album_id == album.id,
-                ).first()
-
-                if not existing_track:
-                    track = Track(
-                        album_id=album.id,
-                        title=recording.get("title", track_data.get("title", "Unknown Track")),
-                        musicbrainz_id=recording_mbid,
-                        track_number=track_data.get("position", 0),
-                        disc_number=disc_number,
-                        duration_ms=recording.get("length"),
-                        has_file=False,
-                    )
-                    db.add(track)
-                    tracks_added += 1
-
-        # Update album track_count
-        total_release_tracks = sum(len(m.get("tracks", [])) for m in media_list)
-        if total_release_tracks > 0 and (album.track_count or 0) < total_release_tracks:
-            album.track_count = total_release_tracks
-
-    except Exception as e:
-        logger.warning(f"Failed to fetch tracks for release group {release_group_mbid}: {e}")
-
-    return tracks_added
+    logger.info(
+        f"Imported release '{album.title}' ({release_mbid}) "
+        f"with {tracks_added} tracks for artist {artist_id}"
+    )
+    return album
 
 
 def bulk_import_release_groups(
