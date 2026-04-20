@@ -26,6 +26,7 @@ class JobType(str, enum.Enum):
     METADATA_REFRESH = "metadata_refresh"
     IMAGE_FETCH = "image_fetch"
     CLEANUP = "cleanup"
+    DEDUPLICATE = "deduplicate"
 
 
 class JobStatus(str, enum.Enum):
