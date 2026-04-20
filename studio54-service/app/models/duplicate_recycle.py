@@ -30,7 +30,7 @@ class DuplicateRecycle(Base):
         default=lambda: datetime.now(timezone.utc)
     )
     expires_at = Column(DateTime(timezone=True), nullable=False)
-    status = Column(String(30), nullable=False, default="pending_review")
+    status = Column(String(30), nullable=False, default=DuplicateRecycleStatus.PENDING_REVIEW)
     restored_at = Column(DateTime(timezone=True), nullable=True)
     deleted_at = Column(DateTime(timezone=True), nullable=True)
 

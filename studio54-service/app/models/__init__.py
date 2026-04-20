@@ -39,6 +39,7 @@ from app.models.download_decision import (
     DownloadHistory,
     Blacklist,
 )
+from app.models.duplicate_recycle import DuplicateRecycle, DuplicateRecycleStatus
 
 __all__ = [
     "User",
