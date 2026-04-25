@@ -1860,7 +1860,6 @@ export const downloadHistoryApi = {
 // ==================== SEARCH ====================
 
 export const searchApi = {
-  // Search for missing albums
   searchMissing: async (artistId?: string, limit = 50): Promise<{
     task_id: string
     status: string
@@ -1870,6 +1869,84 @@ export const searchApi = {
       params: { artist_id: artistId, limit },
     })
     return data
+  },
+
+  searchAlbum: async (albumId: string): Promise<import('../types').ManualSearchResult> => {
+    const { data } = await api.post(`/search/albums/${albumId}`, {})
+    return data
+  },
+
+  grabRelease: async (albumId: string, releaseGuid: string): Promise<{
+    success: boolean
+    album_id: string
+    release_guid: string
+    tracked_download_id: string
+    message: string
+  }> => {
+    const { data } = await api.post(`/search/albums/${albumId}/grab`, {
+      release_guid: releaseGuid,
+    })
+    return data
+  },
+
+  getPending: async (): Promise<import('../types').PendingResponse> => {
+    const { data } = await api.get('/search/pending')
+    return data
+  },
+
+  removePending: async (pendingId: string): Promise<void> => {
+    await api.delete(`/search/pending/${pendingId}`)
+  },
+
+  retryPending: async (pendingId: string): Promise<{ success: boolean; message: string }> => {
+    const { data } = await api.post(`/search/pending/${pendingId}/retry`)
+    return data
+  },
+}
+
+// ==================== QUEUE ====================
+
+export const queueApi = {
+  getQueue: async (params?: {
+    state?: string
+    album_id?: string
+    artist_id?: string
+    include_completed?: boolean
+    limit?: number
+  }): Promise<import('../types').TrackedDownloadQueue> => {
+    const { data } = await api.get('/queue', { params })
+    return data
+  },
+
+  pause: async (downloadId: string): Promise<{ success: boolean; message: string }> => {
+    const { data } = await api.post(`/queue/${downloadId}/pause`)
+    return data
+  },
+
+  resume: async (downloadId: string): Promise<{ success: boolean; message: string }> => {
+    const { data } = await api.post(`/queue/${downloadId}/resume`)
+    return data
+  },
+
+  remove: async (downloadId: string, blacklist = false): Promise<void> => {
+    await api.delete(`/queue/${downloadId}`, { params: { blacklist } })
+  },
+
+  retryImport: async (downloadId: string): Promise<{ success: boolean; message: string }> => {
+    const { data } = await api.post(`/queue/${downloadId}/retry-import`)
+    return data
+  },
+
+  getBlacklist: async (params?: {
+    limit?: number
+    offset?: number
+  }): Promise<import('../types').BlacklistResponse> => {
+    const { data } = await api.get('/queue/blacklist', { params })
+    return data
+  },
+
+  removeFromBlacklist: async (blacklistId: string): Promise<void> => {
+    await api.delete(`/queue/blacklist/${blacklistId}`)
   },
 }
 
