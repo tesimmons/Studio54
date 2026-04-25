@@ -696,3 +696,110 @@ export interface DjRequestUserSummary {
   total_count: number
   pending_count: number
 }
+
+// ============================================================
+// Download Queue & Manual Search Types
+// ============================================================
+
+export type TrackedDownloadState =
+  | 'queued'
+  | 'downloading'
+  | 'paused'
+  | 'import_pending'
+  | 'import_blocked'
+  | 'importing'
+  | 'imported'
+  | 'ignored'
+  | 'failed'
+
+export interface TrackedDownloadItem {
+  id: string
+  title: string
+  state: TrackedDownloadState
+  progress: number
+  size_bytes: number
+  downloaded_bytes: number
+  eta_seconds: number | null
+  album_id: string | null
+  album_title: string | null
+  artist_id: string | null
+  artist_name: string | null
+  quality: string
+  indexer: string
+  grabbed_at: string
+  completed_at: string | null
+  error_message: string | null
+  status_messages: string[]
+  output_path: string
+}
+
+export interface TrackedDownloadQueue {
+  count: number
+  items: TrackedDownloadItem[]
+}
+
+export interface ManualSearchDecision {
+  title: string
+  guid: string
+  quality: string
+  size: number
+  size_mb: number
+  age_days: number
+  publish_date: string | null
+  format: string | null
+  bitrate: number | null
+  indexer: string
+  indexer_id: string
+  protocol: string
+  approved: boolean
+  temporarily_rejected: boolean
+  permanently_rejected: boolean
+  rejections: Array<{ reason: string; type: string }>
+}
+
+export interface ManualSearchResult {
+  album_id: string
+  artist: { id: string; name: string }
+  album: { id: string; title: string; status: string }
+  total_results: number
+  approved_count: number
+  rejected_count: number
+  decisions: ManualSearchDecision[]
+}
+
+export interface BlacklistEntry {
+  id: string
+  album_id: string | null
+  artist_id: string | null
+  release_guid: string
+  release_title: string
+  reason: string
+  source_title: string | null
+  added_at: string
+  album_title?: string | null
+  artist_name?: string | null
+}
+
+export interface BlacklistResponse {
+  count: number
+  items: BlacklistEntry[]
+}
+
+export interface PendingRelease {
+  id: string
+  album_id: string
+  artist_id: string | null
+  release_guid: string
+  release_title: string
+  rejection_reasons: string[]
+  retry_count: number
+  retry_after: string | null
+  added_at: string
+  album_title?: string | null
+  artist_name?: string | null
+}
+
+export interface PendingResponse {
+  count: number
+  items: PendingRelease[]
+}
