@@ -227,12 +227,20 @@ class DownloadDecision:
         return [r.reason for r in self.rejections]
 
     def to_dict(self) -> Dict[str, Any]:
+        ri = self.remote_album.release_info
         return {
-            "title": self.remote_album.release_info.title,
-            "guid": self.remote_album.release_info.guid,
-            "quality": self.remote_album.release_info.quality,
-            "size": self.remote_album.release_info.size,
-            "indexer": self.remote_album.release_info.indexer_name,
+            "title": ri.title,
+            "guid": ri.guid,
+            "quality": ri.quality,
+            "size": ri.size,
+            "size_mb": round(ri.size / (1024 * 1024), 1) if ri.size else 0,
+            "age_days": ri.age_days,
+            "publish_date": ri.publish_date.isoformat() if ri.publish_date else None,
+            "format": ri.codec,
+            "bitrate": ri.bitrate,
+            "indexer": ri.indexer_name,
+            "indexer_id": ri.indexer_id,
+            "protocol": ri.protocol,
             "approved": self.approved,
             "temporarily_rejected": self.temporarily_rejected,
             "permanently_rejected": self.permanently_rejected,
