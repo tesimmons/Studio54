@@ -9,6 +9,7 @@ import { usePlayer, type PlayerTrack } from '../contexts/PlayerContext'
 import { useAuth } from '../contexts/AuthContext'
 import FileBrowserModal from '../components/FileBrowserModal'
 import AddToPlaylistDropdown from '../components/AddToPlaylistDropdown'
+import ManualSearchModal from '../components/ManualSearchModal'
 import StarRating from '../components/StarRating'
 import {
   FiArrowLeft,
@@ -91,6 +92,7 @@ function AlbumDetail() {
   const [searchingTrackId, setSearchingTrackId] = useState<string | null>(null)
   const [showMobileActions, setShowMobileActions] = useState(false)
   const [expandedTrackId, setExpandedTrackId] = useState<string | null>(null)
+  const [showManualSearch, setShowManualSearch] = useState(false)
 
   // Active job tracking for this album
   const [activeJobId, setActiveJobId] = useState<string | null>(null)
@@ -875,9 +877,25 @@ function AlbumDetail() {
               ) : (
                 <>
                   <FiSearch className="w-4 h-4 mr-2" />
-                  Manual Search
+                  Auto Search
                 </>
               )}
+            </button>
+            )}
+
+            {isDjOrAbove && (
+            <button
+              onClick={() => setShowManualSearch(true)}
+              className="flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium
+                border border-gray-200 dark:border-[#30363D]
+                text-gray-700 dark:text-[#8B949E]
+                hover:bg-gray-100 dark:hover:bg-[#1C2128]
+                hover:text-gray-900 dark:hover:text-[#E6EDF3]
+                transition-colors"
+              title="Manual Search — pick a release from indexer results"
+            >
+              <FiSearch size={15} />
+              Manual Search
             </button>
             )}
 
@@ -1000,6 +1018,15 @@ function AlbumDetail() {
                     className="w-full px-4 py-2.5 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#1C2128] flex items-center"
                     onClick={() => { manualSearchMutation.mutate(); setShowMobileActions(false) }}
                     disabled={manualSearchMutation.isPending}
+                  >
+                    <FiSearch className="w-4 h-4 mr-3" />
+                    Auto Search
+                  </button>
+                  )}
+                  {isDjOrAbove && (
+                  <button
+                    className="w-full px-4 py-2.5 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#1C2128] flex items-center"
+                    onClick={() => { setShowManualSearch(true); setShowMobileActions(false) }}
                   >
                     <FiSearch className="w-4 h-4 mr-3" />
                     Manual Search
@@ -2059,6 +2086,14 @@ function AlbumDetail() {
             </div>
           </div>
         </div>
+      )}
+
+      {showManualSearch && album && (
+        <ManualSearchModal
+          albumId={album.id}
+          albumTitle={album.title}
+          onClose={() => setShowManualSearch(false)}
+        />
       )}
       </div>
     </div>
