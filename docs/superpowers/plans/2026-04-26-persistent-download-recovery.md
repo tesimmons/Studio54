@@ -1516,24 +1516,30 @@ const [includeImported, setIncludeImported] = useState(false)
           {includeImported ? 'No downloads found' : 'No active or failed downloads'}
 ```
 
-- [ ] **Step 2: Add `RETRY_SCHEDULED` to `DL_STATUS_BADGES` in `Activity.tsx`**
+- [ ] **Step 2: Fix `DL_STATUS_BADGES` keys in `Activity.tsx` and add `RETRY_SCHEDULED`**
 
-In `studio54-web/src/pages/Activity.tsx`, find `DL_STATUS_BADGES` (around line 115). It currently has entries for `GRABBED`, `IMPORTED`, `IMPORT_STARTED`, `DOWNLOAD_FAILED`, `IMPORT_FAILED`, `DELETED`, `BLACKLISTED`. Add `RETRY_SCHEDULED`:
+**Background:** The backend `queue/history` endpoint serializes `event_type` using `.value` (line 234 of `queue.py`), which returns lowercase strings (`"grabbed"`, `"download_failed"`, etc.). The existing `DL_STATUS_BADGES` map uses uppercase keys — an existing bug that causes all badges to show unstyled. Fix all keys to lowercase while adding `retry_scheduled`.
+
+In `studio54-web/src/pages/Activity.tsx`, find `DL_STATUS_BADGES` (around line 115) and replace the entire object with lowercase keys:
 
 ```typescript
   const DL_STATUS_BADGES: Record<string, { label: string; className: string }> = {
-    GRABBED: { label: 'Grabbed', className: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400' },
-    IMPORTED: { label: 'Imported', className: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' },
-    IMPORT_STARTED: { label: 'Importing', className: 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-400' },
-    DOWNLOAD_FAILED: { label: 'Download Failed', className: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400' },
-    IMPORT_FAILED: { label: 'Import Failed', className: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400' },
-    DELETED: { label: 'Deleted', className: 'bg-gray-100 text-gray-700 dark:bg-[#0D1117] dark:text-gray-300' },
-    BLACKLISTED: { label: 'Blacklisted', className: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400' },
-    RETRY_SCHEDULED: { label: 'Retry Scheduled', className: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400' },
+    grabbed:          { label: 'Grabbed',        className: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400' },
+    imported:         { label: 'Imported',       className: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' },
+    import_started:   { label: 'Importing',      className: 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-400' },
+    download_failed:  { label: 'Download Failed',className: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400' },
+    import_failed:    { label: 'Import Failed',  className: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400' },
+    deleted:          { label: 'Deleted',        className: 'bg-gray-100 text-gray-700 dark:bg-[#0D1117] dark:text-gray-300' },
+    blacklisted:      { label: 'Blacklisted',    className: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400' },
+    retry_scheduled:  { label: 'Retry Scheduled',className: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400' },
   }
 ```
 
-Note: Activity.tsx stores events with uppercase event_type values from the backend. Verify the backend returns `retry_scheduled` (lowercase). If the badge map uses uppercase keys but the backend returns lowercase, find where the event_type is transformed to uppercase (look for `.toUpperCase()` near `DL_STATUS_BADGES` usage) and confirm the key matches. If backend returns lowercase, the key should be `retry_scheduled` not `RETRY_SCHEDULED` — match whatever the existing keys use.
+Also fix the `isFailed` comparison two lines below (around line 698) from uppercase to lowercase:
+
+```typescript
+const isFailed = item.event_type === 'download_failed' || item.event_type === 'import_failed'
+```
 
 - [ ] **Step 3: Verify TypeScript compilation**
 
