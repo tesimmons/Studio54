@@ -53,6 +53,7 @@ class DownloadEventType(str, enum.Enum):
     DOWNLOAD_FAILED = "download_failed"
     DELETED = "deleted"
     BLACKLISTED = "blacklisted"
+    RETRY_SCHEDULED = "retry_scheduled"
 
 
 # =============================================================================

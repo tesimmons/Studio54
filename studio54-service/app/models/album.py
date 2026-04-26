@@ -72,6 +72,11 @@ class Album(Base):
     downloaded_at = Column(DateTime(timezone=True), nullable=True)
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
+    # Persistent retry tracking
+    retry_enabled = Column(Boolean, nullable=False, default=True, server_default='true')
+    next_retry_at = Column(DateTime(timezone=True), nullable=True)
+    download_retry_count = Column(Integer, nullable=False, default=0, server_default='0')
+
     # Relationships
     artist = relationship("Artist", back_populates="albums")
     tracks = relationship("Track", back_populates="album", cascade="all, delete-orphan")

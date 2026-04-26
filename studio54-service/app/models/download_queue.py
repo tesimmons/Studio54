@@ -69,6 +69,7 @@ class DownloadQueue(Base):
     # NZB attempt tracking - stores GUIDs of all NZBs tried for this album's download
     # Used to avoid re-trying the same NZBs when searching for alternates
     attempted_nzb_guids = Column(JSONB, default=list, server_default='[]', nullable=False)
+    pending_alternates = Column(JSONB, nullable=True)
 
     # Timestamps
     queued_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
