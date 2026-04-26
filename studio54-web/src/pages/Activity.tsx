@@ -23,13 +23,16 @@ import {
   FiZapOff,
 } from 'react-icons/fi'
 import Pagination from '../components/Pagination'
+import DownloadQueueTab from '../components/activity/DownloadQueueTab'
+import PendingSection from '../components/activity/PendingSection'
+import BlacklistSection from '../components/activity/BlacklistSection'
 
 const DEFAULT_PER_PAGE = 50
 
 function Activity() {
   const { isDirector } = useAuth()
   const [searchParams, setSearchParams] = useSearchParams()
-  const [activeTab, setActiveTab] = useState<'jobs' | 'downloads' | 'queue-status'>('jobs')
+  const [activeTab, setActiveTab] = useState<'jobs' | 'downloads' | 'queue-status' | 'queue' | 'blacklist'>('jobs')
   const [statusFilter, setStatusFilter] = useState<string>('')
   const [typeFilter, setTypeFilter] = useState<string>('')
 
@@ -562,6 +565,26 @@ function Activity() {
               Queue Status
             </button>
           )}
+          <button
+            onClick={() => setActiveTab('queue')}
+            className={`py-4 px-1 border-b-2 font-medium text-sm whitespace-nowrap ${
+              activeTab === 'queue'
+                ? 'border-[#FF1493] text-[#FF1493]'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:text-gray-400 dark:hover:text-gray-300'
+            }`}
+          >
+            Download Queue
+          </button>
+          <button
+            onClick={() => setActiveTab('blacklist')}
+            className={`py-4 px-1 border-b-2 font-medium text-sm whitespace-nowrap ${
+              activeTab === 'blacklist'
+                ? 'border-[#FF1493] text-[#FF1493]'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:text-gray-400 dark:hover:text-gray-300'
+            }`}
+          >
+            Blacklist
+          </button>
         </nav>
       </div>
 
@@ -1141,6 +1164,17 @@ function Activity() {
       )}
 
       </>}
+
+      {activeTab === 'queue' && (
+        <div className="space-y-6">
+          <DownloadQueueTab />
+          <PendingSection />
+        </div>
+      )}
+
+      {activeTab === 'blacklist' && (
+        <BlacklistSection />
+      )}
 
       {/* Log Viewer Modal */}
       {selectedJobForLog && (
