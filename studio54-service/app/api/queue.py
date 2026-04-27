@@ -75,6 +75,7 @@ async def get_queue(
                 TrackedDownloadState.IMPORT_PENDING,
                 TrackedDownloadState.IMPORT_BLOCKED,
                 TrackedDownloadState.IMPORTING,
+                TrackedDownloadState.FAILED,
             ])
         )
 
@@ -119,6 +120,46 @@ async def get_queue(
 # ============================================================================
 # Static Routes (must be before parameterized routes)
 # ============================================================================
+
+class BlacklistNzbRequest(BaseModel):
+    release_guid: str
+    release_title: Optional[str] = None
+    album_id: Optional[str] = None
+    reason: Optional[str] = None
+
+
+@router.post("/blacklist")
+@rate_limit("30/minute")
+async def add_to_blacklist(
+    request: Request,
+    body: BlacklistNzbRequest,
+    current_user: User = Depends(require_dj_or_above),
+    db: Session = Depends(get_db),
+):
+    """Add a release GUID directly to the blacklist (e.g., from download timeline)."""
+    import uuid as _uuid
+
+    album_id = None
+    if body.album_id:
+        validate_uuid(body.album_id, "Album ID")
+        album_id = _uuid.UUID(body.album_id)
+
+    existing = db.query(Blacklist).filter(Blacklist.release_guid == body.release_guid).first()
+    if existing:
+        return {"id": str(existing.id), "already_blacklisted": True}
+
+    entry = Blacklist(
+        release_guid=body.release_guid,
+        release_title=body.release_title,
+        album_id=album_id,
+        reason=body.reason or "Blacklisted from download timeline",
+    )
+    db.add(entry)
+    db.commit()
+    db.refresh(entry)
+
+    return {"id": str(entry.id), "already_blacklisted": False}
+
 
 @router.get("/blacklist")
 @rate_limit("100/minute")

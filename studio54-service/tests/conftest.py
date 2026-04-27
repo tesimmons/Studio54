@@ -153,8 +153,10 @@ def db_session(test_db):
 
 @pytest.fixture(scope="function")
 def client(db_session):
-    """Provide a FastAPI test client with database override"""
+    """Provide a FastAPI test client with database and auth overrides"""
     from app.main import app
+    from app.auth import require_dj_or_above, require_director, require_any_user
+    from app.models.user import User, UserRole
 
     def override_get_db():
         try:
@@ -162,7 +164,22 @@ def client(db_session):
         finally:
             pass
 
+    # Create a stub director user for all auth checks
+    stub_user = User(
+        id=uuid.uuid4(),
+        username="test-director",
+        password_hash="hashed",
+        role=UserRole.DIRECTOR,
+        is_active=True,
+    )
+
+    async def override_auth():
+        return stub_user
+
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[require_dj_or_above] = override_auth
+    app.dependency_overrides[require_director] = override_auth
+    app.dependency_overrides[require_any_user] = override_auth
 
     with TestClient(app) as test_client:
         yield test_client
