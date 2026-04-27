@@ -824,7 +824,14 @@ def _process_retry_scheduled_albums(db: Session) -> dict:
             album.next_retry_at = None  # clear first — prevents double-firing
             album.download_retry_count = (album.download_retry_count or 0) + 1
             db.commit()
-            search_album.apply_async(args=[str(album.id)])
+            search_album.apply_async(
+                args=[str(album.id)],
+                kwargs={
+                    'job_type': JobType.ALBUM_SEARCH,
+                    'entity_type': 'album',
+                    'entity_id': str(album.id),
+                },
+            )
             triggered += 1
             logger.info(
                 f"Triggered retry #{album.download_retry_count} for '{album.title}'"
