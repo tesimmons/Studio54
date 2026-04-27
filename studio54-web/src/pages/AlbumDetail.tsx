@@ -10,6 +10,7 @@ import { useAuth } from '../contexts/AuthContext'
 import FileBrowserModal from '../components/FileBrowserModal'
 import AddToPlaylistDropdown from '../components/AddToPlaylistDropdown'
 import ManualSearchModal from '../components/ManualSearchModal'
+import DownloadTimeline from '../components/DownloadTimeline'
 import StarRating from '../components/StarRating'
 import {
   FiArrowLeft,
@@ -2094,6 +2095,10 @@ function AlbumDetail() {
           albumTitle={album.title}
           onClose={() => setShowManualSearch(false)}
         />
+      )}
+
+      {album && (
+        <DownloadTimeline albumId={album.id} />
       )}
       </div>
     </div>
