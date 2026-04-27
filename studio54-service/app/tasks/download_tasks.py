@@ -508,8 +508,11 @@ def add_download(album_id: str, nzb_url: str, nzb_title: str, nzb_guid: str,
         except Exception as e:
             logger.warning(f"Failed to write DOWNLOAD_FAILED event: {e}")
 
-        _trigger_auto_retry(db, download)
-        db.commit()  # persist next_retry_at set by _trigger_auto_retry
+        try:
+            _trigger_auto_retry(db, download)
+            db.commit()  # persist next_retry_at set by _trigger_auto_retry
+        except Exception as e:
+            logger.warning(f"Failed to schedule auto-retry: {e}")
 
         return {
             "success": False,
@@ -713,7 +716,7 @@ def _mark_download_failed(db: Session, download: DownloadQueue, error_message: s
             logger.info(f"Reset album '{album.title}' to WANTED")
 
     # Send failure notification (only if max retries exceeded)
-    if (album.download_retry_count or 0) >= 3:
+    if album and (album.download_retry_count or 0) >= 3:
         try:
             from app.services.notification_service import send_notification
             artist = db.query(Artist).filter(Artist.id == album.artist_id).first() if album else None
