@@ -113,13 +113,14 @@ function Activity() {
   const dlTotalPages = dlData ? Math.ceil(dlData.total / DL_PAGE_SIZE) : 0
 
   const DL_STATUS_BADGES: Record<string, { label: string; className: string }> = {
-    GRABBED: { label: 'Grabbed', className: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400' },
-    IMPORTED: { label: 'Imported', className: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' },
-    IMPORT_STARTED: { label: 'Importing', className: 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-400' },
-    DOWNLOAD_FAILED: { label: 'Download Failed', className: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400' },
-    IMPORT_FAILED: { label: 'Import Failed', className: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400' },
-    DELETED: { label: 'Deleted', className: 'bg-gray-100 text-gray-700 dark:bg-[#0D1117] dark:text-gray-300' },
-    BLACKLISTED: { label: 'Blacklisted', className: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400' },
+    grabbed:          { label: 'Grabbed',         className: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400' },
+    imported:         { label: 'Imported',        className: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' },
+    import_started:   { label: 'Importing',       className: 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-400' },
+    download_failed:  { label: 'Download Failed', className: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400' },
+    import_failed:    { label: 'Import Failed',   className: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400' },
+    deleted:          { label: 'Deleted',         className: 'bg-gray-100 text-gray-700 dark:bg-[#0D1117] dark:text-gray-300' },
+    blacklisted:      { label: 'Blacklisted',     className: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400' },
+    retry_scheduled:  { label: 'Retry Scheduled', className: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400' },
   }
 
   // Cancel mutation with error handling
@@ -695,7 +696,7 @@ function Activity() {
                         label: item.event_type,
                         className: 'bg-gray-100 text-gray-700 dark:bg-[#0D1117] dark:text-gray-300',
                       }
-                      const isFailed = item.event_type === 'DOWNLOAD_FAILED' || item.event_type === 'IMPORT_FAILED'
+                      const isFailed = item.event_type === 'download_failed' || item.event_type === 'import_failed'
                       return (
                         <tr key={item.id} className="hover:bg-gray-50 dark:hover:bg-[#161B22]/50">
                           <td className="px-4 py-3 whitespace-nowrap text-gray-600 dark:text-gray-400">

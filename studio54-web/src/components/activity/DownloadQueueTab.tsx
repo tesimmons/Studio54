@@ -159,11 +159,11 @@ function RowActions({ item }: { item: TrackedDownloadItem }) {
 // ── main component ────────────────────────────────────────────────────────────
 
 export default function DownloadQueueTab() {
-  const [includeCompleted, setIncludeCompleted] = useState(false)
+  const [includeImported, setIncludeImported] = useState(false)
 
   const { data, isLoading, isError } = useQuery({
-    queryKey: ['download-queue', includeCompleted],
-    queryFn: () => queueApi.getQueue({ include_completed: includeCompleted, limit: 200 }),
+    queryKey: ['download-queue', includeImported],
+    queryFn: () => queueApi.getQueue({ include_completed: includeImported, limit: 200 }),
     refetchInterval: 5000,
   })
 
@@ -188,11 +188,11 @@ export default function DownloadQueueTab() {
         <label className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400 cursor-pointer">
           <input
             type="checkbox"
-            checked={includeCompleted}
-            onChange={e => setIncludeCompleted(e.target.checked)}
+            checked={includeImported}
+            onChange={e => setIncludeImported(e.target.checked)}
             className="rounded"
           />
-          Show completed
+          Show imported
         </label>
       </div>
 
@@ -206,7 +206,7 @@ export default function DownloadQueueTab() {
 
         {!isLoading && !isError && items.length === 0 && (
           <div className="text-center py-12 text-gray-500 dark:text-gray-400">
-            {includeCompleted ? 'No downloads found' : 'No active downloads'}
+            {includeImported ? 'No downloads found' : 'No active or failed downloads'}
           </div>
         )}
 
