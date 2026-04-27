@@ -12,7 +12,7 @@ Key features:
 from celery import shared_task
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import time
 import logging
 
@@ -412,6 +412,9 @@ def add_download(album_id: str, nzb_url: str, nzb_title: str, nzb_guid: str,
                 queued_at=datetime.now(timezone.utc),
                 attempted_nzb_guids=all_attempted_guids  # Record all GUIDs tried
             )
+            # Store remaining un-tried candidates for fast retry on mid-download failure
+            remaining = candidates[attempt + 1:]
+            download.pending_alternates = remaining if remaining else None
             db.add(download)
 
             # Update album status
@@ -421,6 +424,26 @@ def add_download(album_id: str, nzb_url: str, nzb_title: str, nzb_guid: str,
 
             db.commit()
             db.refresh(download)
+
+            # Write GRABBED event (best-effort — never breaks pipeline)
+            try:
+                db.add(DownloadHistory(
+                    album_id=album_id,
+                    artist_id=album_for_artist.artist_id if album_for_artist else None,
+                    release_guid=c_guid,
+                    release_title=c_title,
+                    event_type=DownloadEventType.GRABBED,
+                    message=f"Sent to SABnzbd (attempt {attempt + 1} of {len(candidates)})",
+                    data={
+                        'nzo_id': result.nzo_id,
+                        'indexer_id': c_indexer_id,
+                        'size_bytes': c_size,
+                        'alternate_count': len(candidates) - 1,
+                    },
+                ))
+                db.commit()
+            except Exception as e:
+                logger.warning(f"Failed to write GRABBED event: {e}")
 
             if attempt > 0:
                 logger.info(
@@ -466,6 +489,27 @@ def add_download(album_id: str, nzb_url: str, nzb_title: str, nzb_guid: str,
             album.status = AlbumStatus.WANTED
 
         db.commit()
+
+        # Write DOWNLOAD_FAILED event and schedule retry
+        try:
+            db.add(DownloadHistory(
+                album_id=album_id,
+                artist_id=album_for_artist.artist_id if album_for_artist else None,
+                release_guid=candidates[0]['nzb_guid'],
+                release_title=candidates[0]['nzb_title'],
+                event_type=DownloadEventType.DOWNLOAD_FAILED,
+                message=f"All {len(candidates)} candidates rejected by SABnzbd. Last: {last_error}",
+                data={
+                    'attempted_guids': all_attempted_guids,
+                    'total_candidates': len(candidates),
+                },
+            ))
+            db.commit()
+        except Exception as e:
+            logger.warning(f"Failed to write DOWNLOAD_FAILED event: {e}")
+
+        _trigger_auto_retry(db, download)
+        db.commit()  # persist next_retry_at set by _trigger_auto_retry
 
         return {
             "success": False,
@@ -644,6 +688,23 @@ def _mark_download_failed(db: Session, download: DownloadQueue, error_message: s
     download.sab_fail_message = sab_fail_message
     download.completed_at = datetime.now(timezone.utc)
 
+    # Write DOWNLOAD_FAILED event (best-effort)
+    try:
+        db.add(DownloadHistory(
+            album_id=download.album_id,
+            artist_id=download.artist_id,
+            release_guid=download.nzb_guid,
+            release_title=download.nzb_title,
+            event_type=DownloadEventType.DOWNLOAD_FAILED,
+            message=error_message,
+            data={
+                'sab_fail_message': sab_fail_message,
+                'sabnzbd_id': download.sabnzbd_id,
+            },
+        ))
+    except Exception as e:
+        logger.warning(f"Failed to write DOWNLOAD_FAILED event: {e}")
+
     album = db.query(Album).filter(Album.id == download.album_id).first()
 
     if reset_album_to_wanted:
@@ -652,7 +713,7 @@ def _mark_download_failed(db: Session, download: DownloadQueue, error_message: s
             logger.info(f"Reset album '{album.title}' to WANTED")
 
     # Send failure notification (only if max retries exceeded)
-    if download.retry_count >= 3:
+    if (album.download_retry_count or 0) >= 3:
         try:
             from app.services.notification_service import send_notification
             artist = db.query(Artist).filter(Artist.id == album.artist_id).first() if album else None
@@ -669,41 +730,73 @@ def _mark_download_failed(db: Session, download: DownloadQueue, error_message: s
 
 def _trigger_auto_retry(db: Session, failed_download: DownloadQueue):
     """
-    Trigger automatic retry with a new search for alternate NZBs.
-    Only retries if retry_count < 3 to avoid infinite loops.
+    Phase 1: if pending_alternates exist, try them immediately without re-searching.
+    Phase 2: schedule a fresh indexer search with progressive back-off.
+    Writes a RETRY_SCHEDULED DownloadHistory event on every path.
+    Skips entirely when album.retry_enabled is False.
     """
-    if failed_download.retry_count >= 3:
-        logger.info(
-            f"Download {failed_download.id} already retried {failed_download.retry_count} times, "
-            f"not auto-retrying"
-        )
-        return
-
-    failed_download.retry_count += 1
-
     album = db.query(Album).filter(Album.id == failed_download.album_id).first()
     if not album:
         return
 
-    # Only retry if album is WANTED (reset by _mark_download_failed) or FAILED
-    if album.status not in (AlbumStatus.WANTED, AlbumStatus.FAILED):
+    if not album.retry_enabled:
+        logger.info(f"Retry disabled for album '{album.title}', skipping auto-retry")
         return
 
-    logger.info(
-        f"Auto-retry #{failed_download.retry_count} for album '{album.title}' "
-        f"(previous: {failed_download.error_message})"
-    )
+    # ── Phase 1: pending alternates (no indexer hit needed) ──────────────────
+    if failed_download.pending_alternates:
+        alternates = list(failed_download.pending_alternates)
+        failed_download.pending_alternates = None
 
-    # Queue a new search - it will skip previously attempted GUIDs
-    search_album.apply_async(
-        args=[str(album.id)],
-        kwargs={
-            'job_type': JobType.ALBUM_SEARCH,
-            'entity_type': 'album',
-            'entity_id': str(album.id)
-        },
-        countdown=30  # Wait 30 seconds before retrying
-    )
+        first = alternates[0]
+        add_download.apply_async(
+            kwargs={
+                'album_id': str(album.id),
+                'nzb_url': first['nzb_url'],
+                'nzb_title': first['nzb_title'],
+                'nzb_guid': first['nzb_guid'],
+                'indexer_id': first['indexer_id'],
+                'size_bytes': first.get('size_bytes', 0),
+                'alternate_nzbs': alternates[1:],
+            },
+            countdown=30,
+        )
+
+        try:
+            db.add(DownloadHistory(
+                album_id=album.id,
+                artist_id=failed_download.artist_id,
+                event_type=DownloadEventType.RETRY_SCHEDULED,
+                message=f"Trying {len(alternates)} alternate NZB(s) — no indexer search needed",
+                data={
+                    'phase': 'quick',
+                    'retry_count': album.download_retry_count,
+                    'alternate_count': len(alternates),
+                },
+            ))
+        except Exception as e:
+            logger.warning(f"Failed to write RETRY_SCHEDULED event: {e}")
+        return
+
+    # ── Phase 2: fresh indexer search with progressive back-off ──────────────
+    retry_num = (album.download_retry_count or 0) + 1
+    delay_seconds = {1: 3600, 2: 21600}.get(retry_num, 86400)
+    album.next_retry_at = datetime.now(timezone.utc) + timedelta(seconds=delay_seconds)
+
+    try:
+        db.add(DownloadHistory(
+            album_id=album.id,
+            artist_id=failed_download.artist_id,
+            event_type=DownloadEventType.RETRY_SCHEDULED,
+            message=f"Fresh indexer search scheduled for {album.next_retry_at.isoformat()}",
+            data={
+                'phase': 'fresh',
+                'retry_count': retry_num,
+                'next_retry_at': album.next_retry_at.isoformat(),
+            },
+        ))
+    except Exception as e:
+        logger.warning(f"Failed to write RETRY_SCHEDULED event: {e}")
 
 
 # ==================== IMPORT ====================
