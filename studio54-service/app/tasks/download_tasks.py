@@ -802,6 +802,53 @@ def _trigger_auto_retry(db: Session, failed_download: DownloadQueue):
         logger.warning(f"Failed to write RETRY_SCHEDULED event: {e}")
 
 
+def _process_retry_scheduled_albums(db: Session) -> dict:
+    """
+    Query albums whose next_retry_at has elapsed and fire a fresh search for each.
+    Separated from the Celery task for testability.
+    """
+    now = datetime.now(timezone.utc)
+    due = db.query(Album).filter(
+        Album.retry_enabled == True,
+        Album.next_retry_at.isnot(None),
+        Album.next_retry_at <= now,
+        Album.status == AlbumStatus.WANTED,
+    ).all()
+
+    if not due:
+        return {'albums_due': 0, 'triggered': 0}
+
+    triggered = 0
+    for album in due:
+        try:
+            album.next_retry_at = None  # clear first — prevents double-firing
+            album.download_retry_count = (album.download_retry_count or 0) + 1
+            db.commit()
+            search_album.apply_async(args=[str(album.id)])
+            triggered += 1
+            logger.info(
+                f"Triggered retry #{album.download_retry_count} for '{album.title}'"
+            )
+        except Exception as e:
+            logger.error(f"Failed to trigger retry for album {album.id}: {e}")
+            db.rollback()
+
+    return {'albums_due': len(due), 'triggered': triggered}
+
+
+@shared_task(name="app.tasks.download_tasks.retry_scheduled_downloads")
+def retry_scheduled_downloads():
+    """Periodic task (every 30 min): fire fresh indexer searches for albums whose next_retry_at has elapsed."""
+    db = get_db()
+    try:
+        return _process_retry_scheduled_albums(db)
+    except Exception as e:
+        logger.error(f"retry_scheduled_downloads failed: {e}")
+        return {'error': str(e)}
+    finally:
+        db.close()
+
+
 # ==================== IMPORT ====================
 
 @shared_task(name="app.tasks.download_tasks.import_download")

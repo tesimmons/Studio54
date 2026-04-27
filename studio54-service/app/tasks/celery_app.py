@@ -20,6 +20,7 @@ Key design decisions:
 """
 
 from celery import Celery, signals
+from celery.schedules import crontab
 from app.config import settings
 import logging
 
@@ -188,6 +189,12 @@ celery_app.conf.update(
             "task": "app.tasks.download_tasks.verify_downloaded_files",
             "schedule": 86400.0,  # 24 hours
             "options": {"expires": 82800, "queue": "downloads"},
+        },
+        # Retry scheduled downloads every 30 minutes
+        "retry-scheduled-downloads": {
+            "task": "app.tasks.download_tasks.retry_scheduled_downloads",
+            "schedule": crontab(minute="*/30"),
+            "options": {"expires": 1500, "queue": "downloads"},
         },
         # Worker autoscale check every 60 seconds
         "check-worker-autoscale": {

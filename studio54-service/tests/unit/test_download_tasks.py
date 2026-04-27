@@ -292,3 +292,60 @@ class TestTriggerAutoRetryRewrite:
 
         db_session.refresh(album)
         assert album.next_retry_at is None
+
+
+class TestRetryScheduledDownloads:
+    def test_triggers_search_for_due_albums(self, db_session):
+        from unittest.mock import patch, MagicMock
+        from datetime import datetime, timezone, timedelta
+        from app.tasks.download_tasks import _process_retry_scheduled_albums
+
+        artist = create_test_artist(db_session)
+        album = create_test_album(
+            db_session, artist.id,
+            status='wanted',
+            retry_enabled=True,
+            download_retry_count=1,
+            next_retry_at=datetime.now(timezone.utc) - timedelta(minutes=5),
+        )
+
+        mock_search = MagicMock()
+        with patch('app.tasks.download_tasks.search_album', mock_search):
+            result = _process_retry_scheduled_albums(db_session)
+
+        assert result['triggered'] == 1
+        mock_search.apply_async.assert_called_once()
+        db_session.refresh(album)
+        assert album.next_retry_at is None        # cleared
+        assert album.download_retry_count == 2    # incremented
+
+    def test_skips_albums_not_yet_due(self, db_session):
+        from datetime import datetime, timezone, timedelta
+        from app.tasks.download_tasks import _process_retry_scheduled_albums
+
+        artist = create_test_artist(db_session)
+        create_test_album(
+            db_session, artist.id,
+            status='wanted',
+            retry_enabled=True,
+            download_retry_count=0,
+            next_retry_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        )
+
+        result = _process_retry_scheduled_albums(db_session)
+        assert result['triggered'] == 0
+
+    def test_skips_retry_disabled_albums(self, db_session):
+        from datetime import datetime, timezone, timedelta
+        from app.tasks.download_tasks import _process_retry_scheduled_albums
+
+        artist = create_test_artist(db_session)
+        create_test_album(
+            db_session, artist.id,
+            status='wanted',
+            retry_enabled=False,
+            next_retry_at=datetime.now(timezone.utc) - timedelta(minutes=5),
+        )
+
+        result = _process_retry_scheduled_albums(db_session)
+        assert result['triggered'] == 0
