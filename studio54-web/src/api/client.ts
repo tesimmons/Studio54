@@ -544,6 +544,16 @@ export const albumsApi = {
     const { data } = await api.post(`/albums/${albumId}/cover-art-from-url`, { url })
     return data
   },
+
+  getDownloadHistory: async (albumId: string): Promise<AlbumDownloadHistory> => {
+    const { data } = await api.get(`/albums/${albumId}/download-history`)
+    return data
+  },
+
+  retryControl: async (albumId: string, req: RetryControlRequest): Promise<RetryControlResponse> => {
+    const { data } = await api.post(`/albums/${albumId}/retry-control`, req)
+    return data
+  },
 }
 
 // ==================== TRACKS ====================
@@ -1856,16 +1866,6 @@ export const downloadHistoryApi = {
     }>
   }> => {
     const { data } = await api.get('/queue/history', { params })
-    return data
-  },
-
-  getDownloadHistory: async (albumId: string): Promise<AlbumDownloadHistory> => {
-    const { data } = await api.get(`/albums/${albumId}/download-history`)
-    return data
-  },
-
-  retryControl: async (albumId: string, req: RetryControlRequest): Promise<RetryControlResponse> => {
-    const { data } = await api.post(`/albums/${albumId}/retry-control`, req)
     return data
   },
 }
