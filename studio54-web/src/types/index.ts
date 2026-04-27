@@ -803,3 +803,34 @@ export interface PendingResponse {
   count: number
   items: PendingRelease[]
 }
+
+// Album Download Timeline
+export interface AlbumDownloadEvent {
+  id: string
+  event_type: 'grabbed' | 'download_failed' | 'retry_scheduled' | 'imported' | 'import_failed' | 'import_started' | 'deleted' | 'blacklisted' | string
+  release_guid: string | null
+  release_title: string | null
+  message: string | null
+  created_at: string | null
+  data: Record<string, unknown> | null
+}
+
+export interface AlbumDownloadHistory {
+  album_id: string
+  retry_enabled: boolean
+  next_retry_at: string | null
+  download_retry_count: number
+  events: AlbumDownloadEvent[]
+}
+
+export interface RetryControlRequest {
+  retry_enabled: boolean
+  search_now?: boolean
+}
+
+export interface RetryControlResponse {
+  album_id: string
+  retry_enabled: boolean
+  next_retry_at: string | null
+  download_retry_count: number
+}

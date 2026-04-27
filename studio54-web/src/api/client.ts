@@ -33,6 +33,9 @@ import type {
   DjRequestUserSummary,
   StorageMount,
   IdentifyResult,
+  AlbumDownloadHistory,
+  RetryControlRequest,
+  RetryControlResponse,
 } from '../types'
 
 // Create axios instance with base configuration
@@ -1855,6 +1858,16 @@ export const downloadHistoryApi = {
     const { data } = await api.get('/queue/history', { params })
     return data
   },
+
+  getDownloadHistory: async (albumId: string): Promise<AlbumDownloadHistory> => {
+    const { data } = await api.get(`/albums/${albumId}/download-history`)
+    return data
+  },
+
+  retryControl: async (albumId: string, req: RetryControlRequest): Promise<RetryControlResponse> => {
+    const { data } = await api.post(`/albums/${albumId}/retry-control`, req)
+    return data
+  },
 }
 
 // ==================== SEARCH ====================
@@ -1947,6 +1960,14 @@ export const queueApi = {
 
   removeFromBlacklist: async (blacklistId: string): Promise<void> => {
     await api.delete(`/queue/blacklist/${blacklistId}`)
+  },
+
+  addToBlacklist: async (releaseGuid: string, releaseTitle?: string, albumId?: string): Promise<void> => {
+    await api.post('/queue/blacklist', {
+      release_guid: releaseGuid,
+      release_title: releaseTitle,
+      album_id: albumId,
+    })
   },
 }
 
