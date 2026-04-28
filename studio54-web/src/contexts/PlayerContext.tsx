@@ -482,8 +482,26 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   }, [state])
 
   const closePopOut = useCallback(() => {
+    // Signal the pop-out to close gracefully (no-op if window is already gone)
     send({ type: 'CLOSE_PLAYER' })
-    // The pop-out will send POPOUT_CLOSED and save state before closing
+
+    // Immediately recover the main window — don't wait for POPOUT_CLOSED broadcast.
+    // If the pop-out was lost (page reload, crash, closed externally), the broadcast
+    // never arrives and the main window stays stuck in pop-out mode indefinitely.
+    if (popOutWindowRef.current && !popOutWindowRef.current.closed) {
+      popOutWindowRef.current.close()
+    }
+    popOutWindowRef.current = null
+    localStorage.removeItem(POPUP_OPEN_FLAG_KEY)
+    setIsPopOutOpen(false)
+
+    try {
+      const saved = localStorage.getItem(POPOUT_STATE_KEY)
+      if (saved) {
+        const restored: SerializedPlayerState = JSON.parse(saved)
+        dispatch({ type: 'RESTORE_STATE', state: restored })
+      }
+    } catch {}
   }, [send])
 
   // When pop-out is open, forward transport commands via BroadcastChannel
@@ -589,11 +607,17 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   }, [isPopOutOpen, send])
 
   const closePlayer = useCallback(() => {
-    if (isPopOutOpen) {
-      send({ type: 'CLOSE_PLAYER' })
+    // Signal pop-out to close (no-op if it's already gone)
+    send({ type: 'CLOSE_PLAYER' })
+    // Force-kill the window and clear the flag so nothing lingers
+    if (popOutWindowRef.current && !popOutWindowRef.current.closed) {
+      popOutWindowRef.current.close()
     }
+    popOutWindowRef.current = null
+    localStorage.removeItem(POPUP_OPEN_FLAG_KEY)
+    setIsPopOutOpen(false)
     dispatch({ type: 'CLOSE_PLAYER' })
-  }, [isPopOutOpen, send])
+  }, [send])
 
   const value: PlayerContextValue = {
     state,

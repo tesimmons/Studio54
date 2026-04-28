@@ -499,6 +499,14 @@ function PersistentPlayer() {
           >
             <FiMinimize2 className="w-5 h-5" />
           </button>
+          {/* Close button — stop all players */}
+          <button
+            onClick={closePlayer}
+            title="Close player"
+            className="p-2 text-gray-500 dark:text-[#8B949E] hover:text-red-500 dark:hover:text-red-400 transition-colors"
+          >
+            <FiX className="w-5 h-5" />
+          </button>
         </div>
       </>
     )
