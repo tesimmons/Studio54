@@ -154,6 +154,28 @@ def search_musicbrainz_local(
 
         if search_type == "artist":
             results = local_db.search_artist(query, limit=limit)
+            # Enrich each artist result with image and first 4 albums
+            from app.services.musicbrainz_images import MusicBrainzImageFetcher
+            image_fetcher = MusicBrainzImageFetcher()
+            for artist in results:
+                artist_id = artist.get("id", "")
+                try:
+                    artist["image_url"] = image_fetcher.fetch_artist_image_sync(artist_id)
+                except Exception:
+                    artist["image_url"] = None
+                try:
+                    all_albums = local_db.get_artist_albums(artist_id)
+                    artist["albums"] = [
+                        {
+                            "id": a.get("id"),
+                            "title": a.get("title"),
+                            "type": a.get("primary-type"),
+                            "year": a.get("first-release-date", "")[:4] if a.get("first-release-date") else None,
+                        }
+                        for a in all_albums[:4]
+                    ]
+                except Exception:
+                    artist["albums"] = []
         elif search_type == "album":
             results = local_db.search_release_group(query, artist_name=artist_filter, limit=limit)
         elif search_type == "track":
