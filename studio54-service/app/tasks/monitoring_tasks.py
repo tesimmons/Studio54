@@ -467,3 +467,70 @@ def check_scheduled_jobs():
         raise
     finally:
         db.close()
+
+
+@shared_task(name="app.tasks.monitoring_tasks.cleanup_expired_listening_sessions")
+def cleanup_expired_listening_sessions():
+    """
+    Hard-delete UserListeningSession rows where pending_delete_at < now.
+
+    Runs nightly at 2am. For book sessions also deletes BookProgress.
+    For series sessions deletes BookProgress for all books in the series.
+    """
+    from app.models.user_listening_session import UserListeningSession
+    from app.models.book_progress import BookProgress
+    from app.models.book_playlist import BookPlaylist, BookPlaylistChapter
+    from app.models.chapter import Chapter
+
+    db: Session = SessionLocal()
+    try:
+        now = datetime.now(timezone.utc)
+        expired = db.query(UserListeningSession).filter(
+            UserListeningSession.pending_delete_at < now
+        ).all()
+
+        book_sessions_deleted = 0
+        series_sessions_deleted = 0
+
+        for session in expired:
+            if session.session_type == "book" and session.book_id:
+                db.query(BookProgress).filter(
+                    BookProgress.user_id == session.user_id,
+                    BookProgress.book_id == session.book_id,
+                ).delete(synchronize_session=False)
+                book_sessions_deleted += 1
+
+            elif session.session_type == "series" and session.series_id:
+                playlist = db.query(BookPlaylist).filter(
+                    BookPlaylist.series_id == session.series_id
+                ).first()
+                if playlist:
+                    chapter_book_ids = (
+                        db.query(Chapter.book_id)
+                        .filter(Chapter.id.in_(
+                            db.query(BookPlaylistChapter.chapter_id)
+                            .filter(BookPlaylistChapter.playlist_id == playlist.id)
+                        ))
+                        .distinct()
+                        .all()
+                    )
+                    for (bid,) in chapter_book_ids:
+                        db.query(BookProgress).filter(
+                            BookProgress.user_id == session.user_id,
+                            BookProgress.book_id == bid,
+                        ).delete(synchronize_session=False)
+                series_sessions_deleted += 1
+
+            db.delete(session)
+
+        db.commit()
+        logger.info(
+            f"Session cleanup: deleted {book_sessions_deleted} book sessions, "
+            f"{series_sessions_deleted} series sessions"
+        )
+
+    except Exception as e:
+        logger.error(f"Session cleanup failed: {e}")
+        db.rollback()
+    finally:
+        db.close()
