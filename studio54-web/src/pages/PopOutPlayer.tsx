@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { FiVolume2, FiVolume1, FiVolumeX, FiX, FiSave, FiCheck } from 'react-icons/fi'
+import { FiVolume2, FiVolume1, FiVolumeX, FiX, FiSave, FiCheck, FiBell } from 'react-icons/fi'
 import { usePlayer, type RepeatMode } from '../contexts/PlayerContext'
 import { usePlayerBroadcast, POPOUT_STATE_KEY, POPUP_OPEN_FLAG_KEY, PLAY_BOOK_REQUEST_KEY, serializePlayerState, type BroadcastMessage } from '../hooks/usePlayerBroadcast'
 import AddToPlaylistDropdown from '../components/AddToPlaylistDropdown'
@@ -25,6 +25,17 @@ function PopOutPlayer() {
   const saveQueueInputRef = useRef<HTMLInputElement>(null)
   const keepAliveRef = useRef<HTMLAudioElement>(null)
   const timeUpdateThrottleRef = useRef(0)
+
+  // Sleep timer state (all local, no persistence across player close)
+  const [sleepTimerEndsAt, setSleepTimerEndsAt] = useState<number | null>(null)
+  const [sleepTimerEndOfChapter, setSleepTimerEndOfChapter] = useState(false)
+  const [sleepTimerDisplay, setSleepTimerDisplay] = useState('')
+  const [showSnoozePopup, setShowSnoozePopup] = useState(false)
+  const [showSleepMenu, setShowSleepMenu] = useState(false)
+  const [customMinutes, setCustomMinutes] = useState('')
+  const sleepTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const sleepTickRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const snoozeAutoCloseRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Read saved currentTime synchronously (state is already hydrated by PlayerProvider)
   const savedTimeRef = useRef(() => {
@@ -353,7 +364,92 @@ function PopOutPlayer() {
     }).catch(() => {})
   }, [state.isPlaying, state.bookId, state.chapterId])
 
+  // Sleep timer helpers (declared before handleEnded so they can be referenced in its deps)
+  const clearSleepTimer = useCallback(() => {
+    if (sleepTimerRef.current) { clearTimeout(sleepTimerRef.current); sleepTimerRef.current = null }
+    if (sleepTickRef.current) { clearInterval(sleepTickRef.current); sleepTickRef.current = null }
+    setSleepTimerEndsAt(null)
+    setSleepTimerEndOfChapter(false)
+    setSleepTimerDisplay('')
+  }, [])
+
+  const fireSleepTimer = useCallback(() => {
+    if (sleepTimerRef.current) { clearTimeout(sleepTimerRef.current); sleepTimerRef.current = null }
+    if (sleepTickRef.current) { clearInterval(sleepTickRef.current); sleepTickRef.current = null }
+    setSleepTimerEndsAt(null)
+    setSleepTimerDisplay('')
+    if (state.bookId && state.chapterId) {
+      const positionMs = Math.round((audioRef.current?.currentTime ?? 0) * 1000)
+      bookProgressApi.upsert(state.bookId, {
+        chapter_id: state.chapterId,
+        position_ms: positionMs,
+      }).catch(() => {})
+    }
+    dispatch({ type: 'PAUSE' })
+    setShowSnoozePopup(true)
+    snoozeAutoCloseRef.current = setTimeout(() => setShowSnoozePopup(false), 30000)
+  }, [state.bookId, state.chapterId, dispatch])
+
+  const setSleepTimer = useCallback((minutes: number) => {
+    if (sleepTimerRef.current) { clearTimeout(sleepTimerRef.current); sleepTimerRef.current = null }
+    if (sleepTickRef.current) { clearInterval(sleepTickRef.current); sleepTickRef.current = null }
+    setSleepTimerEndOfChapter(false)
+    const endsAt = Date.now() + minutes * 60 * 1000
+    setSleepTimerEndsAt(endsAt)
+    setShowSleepMenu(false)
+    sleepTimerRef.current = setTimeout(fireSleepTimer, minutes * 60 * 1000)
+    sleepTickRef.current = setInterval(() => {
+      const remaining = Math.max(0, Math.round((endsAt - Date.now()) / 1000))
+      const m = Math.floor(remaining / 60)
+      const s = remaining % 60
+      setSleepTimerDisplay(`${m}:${s.toString().padStart(2, '0')}`)
+    }, 1000)
+  }, [fireSleepTimer])
+
+  const setSleepTimerEndOfChapterMode = useCallback(() => {
+    if (sleepTimerRef.current) { clearTimeout(sleepTimerRef.current); sleepTimerRef.current = null }
+    if (sleepTickRef.current) { clearInterval(sleepTickRef.current); sleepTickRef.current = null }
+    setSleepTimerEndsAt(null)
+    setSleepTimerDisplay('')
+    setSleepTimerEndOfChapter(true)
+    setShowSleepMenu(false)
+  }, [])
+
+  const snooze15 = useCallback(() => {
+    if (snoozeAutoCloseRef.current) { clearTimeout(snoozeAutoCloseRef.current); snoozeAutoCloseRef.current = null }
+    setShowSnoozePopup(false)
+    dispatch({ type: 'RESUME' })
+    setSleepTimer(15)
+  }, [dispatch, setSleepTimer])
+
+  // Cleanup sleep timer on unmount
+  useEffect(() => {
+    return () => {
+      if (sleepTimerRef.current) clearTimeout(sleepTimerRef.current)
+      if (sleepTickRef.current) clearInterval(sleepTickRef.current)
+      if (snoozeAutoCloseRef.current) clearTimeout(snoozeAutoCloseRef.current)
+    }
+  }, [])
+
+  // Close sleep menu on outside click
+  useEffect(() => {
+    if (!showSleepMenu) return
+    const handler = (e: MouseEvent) => {
+      const target = e.target as HTMLElement
+      if (!target.closest('[data-sleep-menu]')) setShowSleepMenu(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [showSleepMenu])
+
   const handleEnded = useCallback(() => {
+    // End-of-chapter sleep timer intercept
+    if (sleepTimerEndOfChapter) {
+      setSleepTimerEndOfChapter(false)
+      fireSleepTimer()
+      return
+    }
+
     if (currentTrack?.id) {
       if (state.bookId) {
         booksApi.recordChapterPlay(currentTrack.id).catch(() => {})
@@ -388,7 +484,7 @@ function PopOutPlayer() {
     } else {
       dispatch({ type: 'NEXT' })
     }
-  }, [repeatMode, currentTrack?.id, state.bookId, state.sessionEntityId, state.sessionType, state.sessionCurrentIndex, queue.length, dispatch])
+  }, [repeatMode, currentTrack?.id, state.bookId, state.sessionEntityId, state.sessionType, state.sessionCurrentIndex, queue.length, dispatch, sleepTimerEndOfChapter, fireSleepTimer])
 
   const handleTimeUpdate = () => {
     const audio = audioRef.current
@@ -585,6 +681,59 @@ function PopOutPlayer() {
         <img src={S54.player.playlist} alt="Queue" className="w-4 h-4 object-contain" />
         {queue.length > 0 && <span className="absolute -top-1 -right-1 w-3.5 h-3.5 bg-[#FF1493] text-white text-[7px] font-bold rounded-full flex items-center justify-center">{queue.length}</span>}
       </button>
+      {/* Sleep timer button — only shown for book chapters */}
+      {isBookChapter && (
+        <div className="relative" data-sleep-menu>
+          <button
+            title={sleepTimerEndsAt ? `Sleep: ${sleepTimerDisplay}` : sleepTimerEndOfChapter ? 'Sleep: end of chapter' : 'Sleep timer'}
+            onClick={() => setShowSleepMenu(v => !v)}
+            className={`p-1.5 rounded transition-colors flex items-center gap-0.5 ${sleepTimerEndsAt || sleepTimerEndOfChapter ? 'text-[#FF1493]' : 'text-[#8B949E] hover:text-white'}`}
+          >
+            <FiBell className="w-4 h-4" />
+            {(sleepTimerEndsAt || sleepTimerEndOfChapter) && (
+              <span className="text-[9px] font-medium">{sleepTimerEndOfChapter ? 'EOC' : sleepTimerDisplay}</span>
+            )}
+          </button>
+          {showSleepMenu && (
+            <div className="absolute bottom-8 right-0 bg-[#1a1a2e] border border-gray-700 rounded-lg shadow-xl p-3 z-50 w-52">
+              <p className="text-xs text-gray-400 mb-2 font-medium">Sleep Timer</p>
+              <div className="grid grid-cols-2 gap-1 mb-2">
+                {[15, 30, 45, 60].map(m => (
+                  <button key={m} onClick={() => setSleepTimer(m)}
+                    className="px-2 py-1 text-sm rounded bg-gray-800 hover:bg-[#FF1493] transition-colors text-white">
+                    {m} min
+                  </button>
+                ))}
+              </div>
+              <button onClick={setSleepTimerEndOfChapterMode}
+                className="w-full px-2 py-1 text-sm rounded bg-gray-800 hover:bg-[#FF1493] transition-colors text-white mb-2">
+                End of chapter
+              </button>
+              <div className="flex gap-1">
+                <input
+                  type="number" min="1" max="999"
+                  value={customMinutes}
+                  onChange={e => setCustomMinutes(e.target.value)}
+                  placeholder="_ min"
+                  className="flex-1 px-2 py-1 text-sm rounded bg-gray-800 text-white border border-gray-600 focus:border-[#FF1493] outline-none"
+                />
+                <button
+                  onClick={() => { const m = parseInt(customMinutes); if (m > 0) setSleepTimer(m) }}
+                  className="px-2 py-1 text-sm rounded bg-[#FF1493] hover:bg-[#FF1493]/80 text-white"
+                >
+                  Set
+                </button>
+              </div>
+              {(sleepTimerEndsAt || sleepTimerEndOfChapter) && (
+                <button onClick={clearSleepTimer}
+                  className="w-full mt-2 px-2 py-1 text-sm rounded bg-gray-700 hover:bg-gray-600 text-white transition-colors">
+                  Cancel timer
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 
@@ -711,8 +860,33 @@ function PopOutPlayer() {
   // -------------------------------------------------------------------------
 
   return (
-    <div className="h-screen bg-[#0D1117] text-white flex flex-col select-none overflow-hidden">
+    <div className="h-screen bg-[#0D1117] text-white flex flex-col select-none overflow-hidden relative">
       <Toaster position="top-right" />
+      {/* Snooze popup */}
+      {showSnoozePopup && (
+        <div className="absolute inset-0 flex items-center justify-center bg-black/70 z-50">
+          <div className="bg-[#1a1a2e] border border-gray-700 rounded-xl p-5 text-center shadow-xl">
+            <p className="text-white font-medium mb-3">Sleep timer ended</p>
+            <div className="flex gap-2 justify-center">
+              <button
+                onClick={snooze15}
+                className="px-4 py-2 rounded-lg bg-[#FF1493] hover:bg-[#FF1493]/80 text-white font-medium transition-colors"
+              >
+                + 15 minutes
+              </button>
+              <button
+                onClick={() => {
+                  if (snoozeAutoCloseRef.current) clearTimeout(snoozeAutoCloseRef.current)
+                  setShowSnoozePopup(false)
+                }}
+                className="px-4 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-white transition-colors"
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <audio ref={audioRef} preload="auto" onTimeUpdate={handleTimeUpdate} onLoadedMetadata={handleTimeUpdate} onEnded={handleEnded}
         onError={(e) => { const audio = e.currentTarget; const err = audio.error; console.error('Audio error:', err?.code, err?.message, 'src:', audio.src) }} />
       <audio ref={keepAliveRef} src="/silence.mp3" preload="auto" />
