@@ -133,7 +133,7 @@ function PopOutPlayer() {
     window.close()
   }, [state, broadcastSend])
 
-  // Handle beforeunload
+  // Handle beforeunload — save state to localStorage and flush book progress via sendBeacon
   useEffect(() => {
     const handler = () => {
       const ct = audioRef.current?.currentTime ?? 0
@@ -143,6 +143,17 @@ function PopOutPlayer() {
       } catch {}
       localStorage.removeItem(POPUP_OPEN_FLAG_KEY)
       broadcastSend({ type: 'POPOUT_CLOSED' })
+
+      if (state.bookId && state.chapterId) {
+        const token = localStorage.getItem('studio54_token') || ''
+        const baseUrl = (import.meta as any).env?.VITE_API_URL || '/api/v1'
+        const positionMs = Math.round(ct * 1000)
+        const blob = new Blob(
+          [JSON.stringify({ chapter_id: state.chapterId, position_ms: positionMs, token })],
+          { type: 'application/json' }
+        )
+        navigator.sendBeacon(`${baseUrl}/books/${state.bookId}/progress/beacon`, blob)
+      }
     }
     window.addEventListener('beforeunload', handler)
     return () => window.removeEventListener('beforeunload', handler)
@@ -328,6 +339,19 @@ function PopOutPlayer() {
       }
     }
   }, [state.currentTrack?.id, state.isPlaying])
+
+  // Save book progress on pause (pop-out only — main window handles this in PlayerContext)
+  const prevIsPlayingRef = useRef(state.isPlaying)
+  useEffect(() => {
+    const wasPaused = prevIsPlayingRef.current && !state.isPlaying
+    prevIsPlayingRef.current = state.isPlaying
+    if (!wasPaused || !state.bookId || !state.chapterId) return
+    const positionMs = Math.round((audioRef.current?.currentTime ?? 0) * 1000)
+    bookProgressApi.upsert(state.bookId, {
+      chapter_id: state.chapterId,
+      position_ms: positionMs,
+    }).catch(() => {})
+  }, [state.isPlaying, state.bookId, state.chapterId])
 
   const handleEnded = useCallback(() => {
     if (currentTrack?.id) {

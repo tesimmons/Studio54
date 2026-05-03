@@ -220,3 +220,70 @@ async def delete_book_progress(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No progress found for this book",
         )
+
+
+@router.post("/books/{book_id}/progress/beacon")
+async def save_progress_beacon(
+    book_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """
+    Lightweight progress save endpoint for navigator.sendBeacon() on player close.
+    Authenticates via JWT token in the request body (sendBeacon cannot set headers).
+    """
+    import uuid as _uuid
+    from jose import jwt as jose_jwt, JWTError
+    from app.auth import JWT_SECRET, JWT_ALGORITHM
+
+    validate_uuid(book_id, "Book ID")
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON")
+
+    token = body.get("token", "")
+    chapter_id_str = body.get("chapter_id", "")
+    position_ms = body.get("position_ms", 0)
+
+    if not token or not chapter_id_str:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing token or chapter_id")
+
+    try:
+        payload = jose_jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        user_id = payload.get("sub")
+        if not user_id:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+    except JWTError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+
+    from app.models.user import User as UserModel
+    user = db.query(UserModel).filter(UserModel.id == user_id, UserModel.is_active == True).first()  # noqa: E712
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or disabled")
+
+    try:
+        bid = _uuid.UUID(book_id)
+        cid = _uuid.UUID(chapter_id_str)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid UUID")
+
+    existing = db.query(BookProgress).filter(
+        BookProgress.user_id == user.id,
+        BookProgress.book_id == bid,
+    ).first()
+
+    if existing:
+        existing.chapter_id = cid
+        existing.position_ms = int(position_ms)
+    else:
+        db.add(BookProgress(
+            user_id=user.id,
+            book_id=bid,
+            chapter_id=cid,
+            position_ms=int(position_ms),
+        ))
+
+    db.commit()
+    return {"ok": True}
