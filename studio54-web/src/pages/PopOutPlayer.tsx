@@ -2,11 +2,11 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { FiVolume2, FiVolume1, FiVolumeX, FiX, FiSave, FiCheck } from 'react-icons/fi'
 import { usePlayer, type RepeatMode } from '../contexts/PlayerContext'
-import { usePlayerBroadcast, POPOUT_STATE_KEY, POPUP_OPEN_FLAG_KEY, serializePlayerState, type BroadcastMessage } from '../hooks/usePlayerBroadcast'
+import { usePlayerBroadcast, POPOUT_STATE_KEY, POPUP_OPEN_FLAG_KEY, PLAY_BOOK_REQUEST_KEY, serializePlayerState, type BroadcastMessage } from '../hooks/usePlayerBroadcast'
 import AddToPlaylistDropdown from '../components/AddToPlaylistDropdown'
 import LyricsPanel from '../components/LyricsPanel'
 import StarRating from '../components/StarRating'
-import { tracksApi, playlistsApi, booksApi, bookProgressApi, nowPlayingApi } from '../api/client'
+import { tracksApi, playlistsApi, booksApi, bookProgressApi, nowPlayingApi, listeningSessionApi } from '../api/client'
 import toast from 'react-hot-toast'
 import { Toaster } from 'react-hot-toast'
 import { S54 } from '../assets/graphics'
@@ -147,6 +147,24 @@ function PopOutPlayer() {
     window.addEventListener('beforeunload', handler)
     return () => window.removeEventListener('beforeunload', handler)
   }, [state, broadcastSend])
+
+  // On mount: check if a PLAY_BOOK request was queued before this window opened
+  useEffect(() => {
+    const raw = localStorage.getItem(PLAY_BOOK_REQUEST_KEY)
+    if (!raw) return
+    localStorage.removeItem(PLAY_BOOK_REQUEST_KEY)
+    try {
+      const req = JSON.parse(raw)
+      dispatch({
+        type: 'PLAY_BOOK',
+        tracks: req.tracks,
+        startIndex: req.startIndex ?? 0,
+        bookId: req.bookId,
+        sessionType: req.sessionType,
+        sessionEntityId: req.sessionEntityId,
+      })
+    } catch {}
+  }, [])
 
   // Audio source management
   const getAudioSrc = useCallback(() => {
