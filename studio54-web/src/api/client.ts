@@ -86,13 +86,33 @@ api.interceptors.response.use(
     }
     return response
   },
-  (error: AxiosError) => {
+  async (error: AxiosError) => {
     if (error.response) {
       if (error.response.status === 401) {
-        // Token expired or invalid - clear auth and redirect to login
+        const token = localStorage.getItem('studio54_token')
+        const originalRequest = error.config as any
+        // Try a silent token refresh before giving up (avoids kicking the music player)
+        if (token && !originalRequest?._retried) {
+          originalRequest._retried = true
+          try {
+            const res = await axios.post(
+              `${api.defaults.baseURL}/auth/refresh`,
+              null,
+              { headers: { Authorization: `Bearer ${token}` } }
+            )
+            const newToken: string = res.data.access_token
+            localStorage.setItem('studio54_token', newToken)
+            originalRequest.headers = {
+              ...originalRequest.headers,
+              Authorization: `Bearer ${newToken}`,
+            }
+            return api(originalRequest)
+          } catch {
+            // Refresh failed — fall through to logout
+          }
+        }
         localStorage.removeItem('studio54_token')
         localStorage.removeItem('studio54_user')
-        // Only redirect if not already on login page
         if (!window.location.pathname.includes('/login')) {
           window.location.href = '/login'
         }
@@ -2887,6 +2907,83 @@ export const bookProgressApi = {
 
   batchGet: async (bookIds: string[]): Promise<{ progress: Record<string, import('../types').BookProgress> }> => {
     const { data } = await api.post('/books/progress/batch', { book_ids: bookIds })
+    return data
+  },
+}
+
+// ==================== LISTENING SESSIONS ====================
+
+export interface ListeningSession {
+  id: string
+  session_type: 'book' | 'series'
+  book_id: string | null
+  series_id: string | null
+  chapter_queue: string[]
+  current_index: number
+  archived_at: string | null
+  pending_delete_at: string | null
+  created_at: string | null
+  updated_at: string | null
+}
+
+export const listeningSessionApi = {
+  getBook: async (bookId: string): Promise<ListeningSession | null> => {
+    try {
+      const { data } = await api.get(`/books/${bookId}/session`)
+      return data
+    } catch (e: any) {
+      if (e.response?.status === 404) return null
+      throw e
+    }
+  },
+
+  createBook: async (bookId: string): Promise<ListeningSession> => {
+    const { data } = await api.post(`/books/${bookId}/session`)
+    return data
+  },
+
+  patchBook: async (bookId: string, currentIndex: number): Promise<ListeningSession> => {
+    const { data } = await api.patch(`/books/${bookId}/session`, { current_index: currentIndex })
+    return data
+  },
+
+  archiveBook: async (bookId: string): Promise<ListeningSession> => {
+    const { data } = await api.post(`/books/${bookId}/session/archive`)
+    return data
+  },
+
+  unarchiveBook: async (bookId: string): Promise<ListeningSession> => {
+    const { data } = await api.delete(`/books/${bookId}/session/archive`)
+    return data
+  },
+
+  getSeries: async (seriesId: string): Promise<ListeningSession | null> => {
+    try {
+      const { data } = await api.get(`/series/${seriesId}/session`)
+      return data
+    } catch (e: any) {
+      if (e.response?.status === 404) return null
+      throw e
+    }
+  },
+
+  createSeries: async (seriesId: string): Promise<ListeningSession> => {
+    const { data } = await api.post(`/series/${seriesId}/session`)
+    return data
+  },
+
+  patchSeries: async (seriesId: string, currentIndex: number): Promise<ListeningSession> => {
+    const { data } = await api.patch(`/series/${seriesId}/session`, { current_index: currentIndex })
+    return data
+  },
+
+  archiveSeries: async (seriesId: string): Promise<ListeningSession> => {
+    const { data } = await api.post(`/series/${seriesId}/session/archive`)
+    return data
+  },
+
+  unarchiveSeries: async (seriesId: string): Promise<ListeningSession> => {
+    const { data } = await api.delete(`/series/${seriesId}/session/archive`)
     return data
   },
 }
