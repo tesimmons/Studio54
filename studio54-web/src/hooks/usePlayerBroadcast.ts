@@ -6,6 +6,7 @@ export const POPOUT_STATE_KEY = 'studio54-player-popout-state'
 // Synchronous flag written by the popup on open/close so the main window can
 // read it immediately on load — eliminates the PING/PONG race condition.
 export const POPUP_OPEN_FLAG_KEY = 'studio54-player-popup-open'
+export const PLAY_BOOK_REQUEST_KEY = 'studio54_play_book_request'
 
 export interface SerializedPlayerState {
   currentTrack: PlayerTrack | null
@@ -20,6 +21,9 @@ export interface SerializedPlayerState {
   bookId: string | null
   chapterId: string | null
   currentTime: number
+  sessionType: 'book' | 'series' | null
+  sessionEntityId: string | null
+  sessionCurrentIndex: number
 }
 
 export type BroadcastMessageType =
@@ -84,6 +88,9 @@ export function serializePlayerState(
     isMuted: boolean
     bookId: string | null
     chapterId: string | null
+    sessionType?: 'book' | 'series' | null
+    sessionEntityId?: string | null
+    sessionCurrentIndex?: number
   },
   currentTime: number
 ): SerializedPlayerState {
@@ -100,5 +107,8 @@ export function serializePlayerState(
     bookId: state.bookId,
     chapterId: state.chapterId,
     currentTime,
+    sessionType: state.sessionType ?? null,
+    sessionEntityId: state.sessionEntityId ?? null,
+    sessionCurrentIndex: state.sessionCurrentIndex ?? 0,
   }
 }
