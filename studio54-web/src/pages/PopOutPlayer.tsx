@@ -365,6 +365,16 @@ function PopOutPlayer() {
           position_ms: 0,
           ...(isLastChapter ? { completed: true } : {}),
         }).catch(() => {})
+
+        // PATCH session current_index to the next chapter
+        if (state.sessionEntityId && !isLastChapter) {
+          const nextIndex = state.sessionCurrentIndex + 1
+          if (state.sessionType === 'book') {
+            listeningSessionApi.patchBook(state.sessionEntityId, nextIndex).catch(() => {})
+          } else if (state.sessionType === 'series') {
+            listeningSessionApi.patchSeries(state.sessionEntityId, nextIndex).catch(() => {})
+          }
+        }
       } else {
         tracksApi.recordPlay(currentTrack.id).catch(() => {})
       }
@@ -378,7 +388,7 @@ function PopOutPlayer() {
     } else {
       dispatch({ type: 'NEXT' })
     }
-  }, [repeatMode, currentTrack?.id, state.bookId, queue.length, dispatch])
+  }, [repeatMode, currentTrack?.id, state.bookId, state.sessionEntityId, state.sessionType, state.sessionCurrentIndex, queue.length, dispatch])
 
   const handleTimeUpdate = () => {
     const audio = audioRef.current
