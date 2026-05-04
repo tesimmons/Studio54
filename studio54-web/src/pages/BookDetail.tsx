@@ -2,8 +2,8 @@ import { useState, useEffect, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast, { Toaster } from 'react-hot-toast'
-import { booksApi, bookProgressApi, fileOrganizationApi, jobsApi, authorsApi, authFetch } from '../api/client'
-import type { Job } from '../api/client'
+import { booksApi, bookProgressApi, fileOrganizationApi, jobsApi, authorsApi, authFetch, listeningSessionApi } from '../api/client'
+import type { Job, ListeningSession } from '../api/client'
 import { usePlayer, type PlayerTrack } from '../contexts/PlayerContext'
 import { useAuth } from '../contexts/AuthContext'
 import FileBrowserModal from '../components/FileBrowserModal'
@@ -104,6 +104,10 @@ function BookDetail() {
   const [editCoAuthorInput, setEditCoAuthorInput] = useState('')
   const [showSetLeadModal, setShowSetLeadModal] = useState(false)
   const [tagWriteJobId, setTagWriteJobId] = useState<string | null>(null)
+
+  const [listeningSession, setListeningSession] = useState<ListeningSession | null>(null)
+  const [markingFinished, setMarkingFinished] = useState(false)
+  const [showMarkFinishedDialog, setShowMarkFinishedDialog] = useState(false)
 
   // Bulk chapter selection state
   const [bulkChapterMode, setBulkChapterMode] = useState(false)
@@ -212,6 +216,13 @@ function BookDetail() {
     queryFn: () => bookProgressApi.get(id!),
     enabled: !!id,
   })
+
+  useEffect(() => {
+    if (!book?.id) return
+    listeningSessionApi.getBook(book.id)
+      .then(session => setListeningSession(session))
+      .catch(() => setListeningSession(null))
+  }, [book?.id])
 
   // Mark book as finished/unfinished
   const markFinishedMutation = useMutation({
@@ -578,40 +589,50 @@ function BookDetail() {
     ? book.chapters.findIndex(ch => ch.id === bookProgress.chapter_id)
     : -1
 
-  const handlePlayBook = (fromBeginning = false) => {
+  const handlePlayBook = async (fromBeginning = false) => {
     const tracks = buildPlayerTracks()
     if (tracks.length === 0) return
 
     if (fromBeginning) {
-      // Reset progress and play from start
       bookProgressApi.reset(book.id).catch(() => {})
+      let session = listeningSession
+      if (session) {
+        listeningSessionApi.patchBook(book.id, 0).catch(() => {})
+        setListeningSession({ ...session, current_index: 0 })
+      }
       refetchProgress()
-      player.playBook(tracks, 0, book.id)
+      player.playBook(tracks, 0, book.id, 'book', book.id)
       return
     }
 
-    if (hasProgress && progressChapterIndex >= 0) {
-      // Find the index in the filtered (has_file) tracks
-      const fileTrackIndex = tracks.findIndex(t => t.id === bookProgress.chapter_id)
-      const startIdx = fileTrackIndex >= 0 ? fileTrackIndex : 0
-      player.playBook(tracks, startIdx, book.id)
-      // Seek to saved position after a short delay to let audio load
-      if (bookProgress.position_ms > 0) {
-        const seekAfterLoad = () => {
-          const audio = player.audioRef.current
-          if (audio) {
-            const doSeek = () => {
-              audio.currentTime = bookProgress.position_ms / 1000
-              audio.removeEventListener('canplay', doSeek)
-            }
-            audio.addEventListener('canplay', doSeek)
-          }
-        }
-        setTimeout(seekAfterLoad, 100)
+    // Ensure session exists; use its current_index for resume
+    let session = listeningSession
+    if (!session) {
+      try {
+        session = await listeningSessionApi.createBook(book.id)
+        setListeningSession(session)
+      } catch {
+        // Fall back to progress-based resume
       }
-    } else {
-      player.playBook(tracks, 0, book.id)
     }
+
+    const startIdx = session ? Math.min(session.current_index, tracks.length - 1) : 0
+
+    if (bookProgress?.position_ms && bookProgress.position_ms > 0) {
+      const seekAfterLoad = () => {
+        const audio = player.audioRef.current
+        if (audio) {
+          const doSeek = () => {
+            audio.currentTime = bookProgress.position_ms / 1000
+            audio.removeEventListener('canplay', doSeek)
+          }
+          audio.addEventListener('canplay', doSeek)
+        }
+      }
+      setTimeout(seekAfterLoad, 100)
+    }
+
+    player.playBook(tracks, startIdx, book.id, 'book', book.id)
   }
 
   return (
@@ -1106,6 +1127,15 @@ function BookDetail() {
               </button>
             )}
 
+            {listeningSession && !listeningSession.archived_at && (
+              <button
+                onClick={() => setShowMarkFinishedDialog(true)}
+                className="btn btn-secondary"
+              >
+                Mark as Read
+              </button>
+            )}
+
             {isDjOrAbove && book.co_authors && book.co_authors.length > 0 && (
             <button
               className="btn btn-secondary"
@@ -1238,6 +1268,15 @@ function BookDetail() {
                     Play from Beginning
                   </button>
                   )}
+                  {listeningSession && !listeningSession.archived_at && (
+                  <button
+                    className="w-full px-4 py-2.5 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#1C2128] flex items-center"
+                    onClick={() => { setShowMarkFinishedDialog(true); setShowMobileActions(false) }}
+                  >
+                    <FiCheckCircle className="w-4 h-4 mr-3" />
+                    Mark as Read
+                  </button>
+                  )}
                   {isDjOrAbove && book.co_authors && book.co_authors.length > 0 && (
                   <button
                     className="w-full px-4 py-2.5 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#1C2128] flex items-center"
@@ -1302,6 +1341,28 @@ function BookDetail() {
           className="hidden md:flex order-1 w-64 h-64 bg-gradient-to-br from-gray-600 to-gray-800 rounded-lg items-center justify-center flex-shrink-0 shadow-lg overflow-hidden"
         />
       </div>
+
+      {/* Archived session undo banner */}
+      {listeningSession?.archived_at && listeningSession.pending_delete_at && (
+        <div className="mx-4 mb-4 px-4 py-3 bg-gray-800/80 border border-gray-700 rounded-lg flex items-center justify-between">
+          <span className="text-gray-300 text-sm">
+            You marked this as finished on{' '}
+            {new Date(listeningSession.archived_at).toLocaleDateString()}.{' '}
+            Undo until {new Date(listeningSession.pending_delete_at).toLocaleDateString()}.
+          </span>
+          <button
+            onClick={async () => {
+              try {
+                const updated = await listeningSessionApi.unarchiveBook(book.id)
+                setListeningSession(updated)
+              } catch {}
+            }}
+            className="ml-4 px-3 py-1 rounded bg-[#FF1493] hover:bg-[#FF1493]/80 text-white text-sm transition-colors"
+          >
+            Undo
+          </button>
+        </div>
+      )}
 
       {/* Download Status Banner */}
       {book.downloads && book.downloads.length > 0 && (
@@ -2223,6 +2284,45 @@ function BookDetail() {
           onConfirm={(leadName) => setLeadAuthorMutation.mutate(leadName)}
           isPending={setLeadAuthorMutation.isPending}
         />
+      )}
+
+      {/* Mark as Read confirmation dialog */}
+      {showMarkFinishedDialog && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+          <div className="bg-[#1a1a2e] border border-gray-700 rounded-xl p-6 max-w-md mx-4 shadow-xl">
+            <h3 className="text-white font-semibold text-lg mb-2">Mark as finished?</h3>
+            <p className="text-gray-400 mb-4">
+              Mark <span className="text-white">{book.title}</span> as finished? Your progress will be
+              kept for 7 days in case you need to recover it.
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => setShowMarkFinishedDialog(false)}
+                className="px-4 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-white transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                disabled={markingFinished}
+                onClick={async () => {
+                  setMarkingFinished(true)
+                  try {
+                    const updated = await listeningSessionApi.archiveBook(book.id)
+                    setListeningSession(updated)
+                    setShowMarkFinishedDialog(false)
+                  } catch {
+                    // silent — could add toast here
+                  } finally {
+                    setMarkingFinished(false)
+                  }
+                }}
+                className="px-4 py-2 rounded-lg bg-[#FF1493] hover:bg-[#FF1493]/80 text-white font-medium transition-colors"
+              >
+                {markingFinished ? 'Saving…' : 'Mark as Read'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )
