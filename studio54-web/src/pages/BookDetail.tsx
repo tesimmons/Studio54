@@ -589,13 +589,13 @@ function BookDetail() {
     ? book.chapters.findIndex(ch => ch.id === bookProgress.chapter_id)
     : -1
 
-  const handlePlayBook = async (fromBeginning = false) => {
+  const handlePlayBook = (fromBeginning = false) => {
     const tracks = buildPlayerTracks()
     if (tracks.length === 0) return
 
     if (fromBeginning) {
       bookProgressApi.reset(book.id).catch(() => {})
-      let session = listeningSession
+      const session = listeningSession
       if (session) {
         listeningSessionApi.patchBook(book.id, 0).catch(() => {})
         setListeningSession({ ...session, current_index: 0 })
@@ -605,18 +605,18 @@ function BookDetail() {
       return
     }
 
-    // Ensure session exists; use its current_index for resume
-    let session = listeningSession
-    if (!session) {
-      try {
-        session = await listeningSessionApi.createBook(book.id)
-        setListeningSession(session)
-      } catch {
-        // Fall back to progress-based resume
-      }
-    }
+    // Use whatever session index we already have — don't await so window.open
+    // remains in a synchronous user-gesture context (required by iOS Safari).
+    const startIdx = listeningSession
+      ? Math.min(listeningSession.current_index, tracks.length - 1)
+      : 0
 
-    const startIdx = session ? Math.min(session.current_index, tracks.length - 1) : 0
+    // Create session in background if needed (doesn't block playback)
+    if (!listeningSession) {
+      listeningSessionApi.createBook(book.id)
+        .then(s => setListeningSession(s))
+        .catch(() => {})
+    }
 
     if (bookProgress?.position_ms && bookProgress.position_ms > 0) {
       const seekAfterLoad = () => {

@@ -115,8 +115,14 @@ function PersistentPlayer() {
     return null
   }, [currentTrack])
 
+  // Track isPopOutOpen transitions so we can restore position when the pop-out closes
+  const prevIsPopOutOpenRef = useRef(isPopOutOpen)
+
   // Skip audio management when pop-out is active
   useEffect(() => {
+    const wasPopOutOpen = prevIsPopOutOpenRef.current
+    prevIsPopOutOpenRef.current = isPopOutOpen
+
     if (isPopOutOpen) return
     const audio = audioRef.current
     if (!audio) return
@@ -124,13 +130,14 @@ function PersistentPlayer() {
     if (src) {
       audio.src = src
       audio.load()
-      if (isPlaying) {
-        const onCanPlay = () => {
-          audio.play().catch((e) => console.warn('Playback failed:', e))
-          audio.removeEventListener('canplay', onCanPlay)
-        }
-        audio.addEventListener('canplay', onCanPlay)
+      // When transitioning back from the pop-out, seek to where the pop-out stopped
+      const seekTo = wasPopOutOpen ? popOutCurrentTime : 0
+      const onCanPlay = () => {
+        if (seekTo > 0) audio.currentTime = seekTo
+        if (isPlaying) audio.play().catch((e) => console.warn('Playback failed:', e))
+        audio.removeEventListener('canplay', onCanPlay)
       }
+      audio.addEventListener('canplay', onCanPlay)
     }
   }, [currentTrack?.id, isPopOutOpen])
 

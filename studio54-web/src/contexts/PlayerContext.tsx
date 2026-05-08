@@ -486,7 +486,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     const win = window.open(
       '/player',
       'studio54-player',
-      'width=420,height=250,resizable=yes'
+      'width=440,height=400,resizable=yes'
     )
     if (win) {
       popOutWindowRef.current = win
@@ -553,13 +553,25 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     if (isPopOutOpen) {
       send({ type: 'PLAY_BOOK', payload })
     } else {
+      // Mobile browsers block popups or open them as new tabs — play in the persistent player instead.
+      const isMobile = window.matchMedia('(max-width: 767px)').matches
+      if (isMobile) {
+        dispatch({ type: 'PLAY_BOOK', ...payload })
+        return
+      }
       try {
         localStorage.setItem(PLAY_BOOK_REQUEST_KEY, JSON.stringify(payload))
       } catch {}
-      const win = window.open('/player', 'studio54-player', 'width=420,height=250,resizable=yes')
+      const win = window.open('/player', 'studio54-player', 'width=440,height=400,resizable=yes')
       if (win) {
         popOutWindowRef.current = win
         setIsPopOutOpen(true)
+        // Broadcast immediately as a fallback for existing tabs that won't reload.
+        // A fresh tab has no BroadcastChannel listener yet, so this is safely ignored there.
+        send({ type: 'PLAY_BOOK', payload })
+      } else {
+        // Popup was blocked (e.g. adblocker) — fall back to persistent player.
+        dispatch({ type: 'PLAY_BOOK', ...payload })
       }
     }
   }, [isPopOutOpen, send])

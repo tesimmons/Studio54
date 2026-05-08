@@ -2,10 +2,17 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { artistsApi, rootFoldersApi, qualityProfilesApi, searchApi, authFetch } from '../api/client'
-import { FiSearch, FiPlus, FiRefreshCw, FiX, FiTrash2, FiMusic, FiDownload, FiCheck, FiGrid, FiList, FiDatabase, FiAlertCircle, FiLoader } from 'react-icons/fi'
+import { FiSearch, FiPlus, FiRefreshCw, FiX, FiTrash2, FiMusic, FiDownload, FiCheck, FiGrid, FiList, FiDatabase, FiAlertCircle, FiLoader, FiChevronDown, FiChevronUp } from 'react-icons/fi'
 import ImportArtistsModal from '../components/ImportArtistsModal'
 import Pagination from '../components/Pagination'
 import type { Artist, RootFolder, QualityProfile } from '../types'
+
+interface MusicBrainzArtistAlbum {
+  id: string
+  title: string
+  type?: string
+  year?: string
+}
 
 interface MusicBrainzArtist {
   id: string
@@ -14,6 +21,8 @@ interface MusicBrainzArtist {
   country?: string
   type?: string
   score?: number
+  image_url?: string | null
+  albums?: MusicBrainzArtistAlbum[]
 }
 
 type FilterMode = 'all' | 'monitored' | 'unmonitored'
@@ -51,6 +60,7 @@ function Artists() {
   const [mbSearchQuery, setMbSearchQuery] = useState('')
   const [mbResults, setMbResults] = useState<MusicBrainzArtist[]>([])
   const [mbSearching, setMbSearching] = useState(false)
+  const [expandedMbArtist, setExpandedMbArtist] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [deleteDialogArtist, setDeleteDialogArtist] = useState<{ id: string; name: string; linkedFiles: number } | null>(null)
   const [deleteDialogFiles, setDeleteDialogFiles] = useState(false)
@@ -934,43 +944,91 @@ function Artists() {
                         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#FF1493]"></div>
                       </div>
                     ) : mbResults.length > 0 ? (
-                      mbResults.map((result) => (
-                        <div key={result.id} className="border border-gray-200 dark:border-[#30363D] rounded-lg p-4 hover:bg-gray-50 dark:hover:bg-[#1C2128] transition-colors">
-                          <div className="flex items-start justify-between">
-                            <div className="flex-1">
-                              <h3 className="font-semibold text-gray-900 dark:text-white">{result.name}</h3>
-                              {result.disambiguation && (
-                                <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">({result.disambiguation})</p>
-                              )}
-                              <div className="flex items-center space-x-4 mt-2 text-sm text-gray-500 dark:text-gray-400">
-                                {result.type && <span>{result.type}</span>}
-                                {result.country && <span>{result.country}</span>}
-                                {result.score && <span className="text-[#FF1493]">Match: {result.score}%</span>}
+                      mbResults.map((result) => {
+                        const isExpanded = expandedMbArtist === result.id
+                        return (
+                          <div key={result.id} className="border border-gray-200 dark:border-[#30363D] rounded-lg overflow-hidden">
+                            {/* Main row — click to expand */}
+                            <div className="flex items-center gap-3 px-3 py-3 hover:bg-gray-50 dark:hover:bg-[#1C2128] transition-colors">
+                              {/* Artist image / placeholder */}
+                              <div
+                                className="flex-shrink-0 w-12 h-12 rounded-md overflow-hidden bg-gray-100 dark:bg-[#21262D] flex items-center justify-center cursor-pointer"
+                                onClick={() => setExpandedMbArtist(isExpanded ? null : result.id)}
+                              >
+                                {result.image_url ? (
+                                  <img src={result.image_url} alt={result.name} className="w-full h-full object-cover" />
+                                ) : (
+                                  <FiMusic className="text-gray-400 dark:text-gray-500" size={20} />
+                                )}
                               </div>
-                            </div>
-                            <button
-                              className="btn btn-primary btn-sm"
-                              onClick={() => {
-                                setSelectedMbArtist(result)
-                                // Pre-select defaults
-                                if (rootFolders && rootFolders.length > 0) {
-                                  setAddRootFolder(rootFolders[0].path)
-                                }
-                                if (qualityProfiles) {
-                                  const defaultProfile = qualityProfiles.find(p => p.is_default)
-                                  if (defaultProfile) {
-                                    setAddQualityProfile(defaultProfile.id)
-                                  } else if (qualityProfiles.length > 0) {
-                                    setAddQualityProfile(qualityProfiles[0].id)
+                              {/* Artist info */}
+                              <div
+                                className="flex-1 min-w-0 cursor-pointer"
+                                onClick={() => setExpandedMbArtist(isExpanded ? null : result.id)}
+                              >
+                                <p className="font-semibold text-gray-900 dark:text-white truncate">{result.name}</p>
+                                {result.disambiguation && (
+                                  <p className="text-xs text-gray-500 dark:text-gray-400 truncate">({result.disambiguation})</p>
+                                )}
+                                <div className="flex items-center gap-2 mt-0.5 flex-wrap text-xs text-gray-500 dark:text-gray-400">
+                                  {result.type && <span>{result.type}</span>}
+                                  {result.country && <span>{result.country}</span>}
+                                  {result.score && <span className="text-[#FF1493] font-medium">Match: {result.score}%</span>}
+                                </div>
+                              </div>
+                              {/* Expand toggle */}
+                              <button
+                                className="flex-shrink-0 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 p-1"
+                                onClick={() => setExpandedMbArtist(isExpanded ? null : result.id)}
+                                title={isExpanded ? 'Collapse' : 'Show albums'}
+                              >
+                                {isExpanded ? <FiChevronUp size={16} /> : <FiChevronDown size={16} />}
+                              </button>
+                              {/* Select button */}
+                              <button
+                                className="btn btn-primary btn-sm flex-shrink-0"
+                                onClick={() => {
+                                  setSelectedMbArtist(result)
+                                  if (rootFolders && rootFolders.length > 0) {
+                                    setAddRootFolder(rootFolders[0].path)
                                   }
-                                }
-                              }}
-                            >
-                              Select
-                            </button>
+                                  if (qualityProfiles) {
+                                    const defaultProfile = qualityProfiles.find(p => p.is_default)
+                                    if (defaultProfile) {
+                                      setAddQualityProfile(defaultProfile.id)
+                                    } else if (qualityProfiles.length > 0) {
+                                      setAddQualityProfile(qualityProfiles[0].id)
+                                    }
+                                  }
+                                }}
+                              >
+                                Select
+                              </button>
+                            </div>
+                            {/* Expandable albums */}
+                            {isExpanded && (
+                              <div className="border-t border-gray-200 dark:border-[#30363D] bg-gray-50 dark:bg-[#0D1117] px-3 py-2">
+                                {result.albums && result.albums.length > 0 ? (
+                                  <>
+                                    <p className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-2">Top Albums</p>
+                                    <div className="space-y-1">
+                                      {result.albums.map((album) => (
+                                        <div key={album.id} className="flex items-center gap-2 text-xs">
+                                          <span className="text-gray-900 dark:text-white font-medium flex-1 truncate">{album.title}</span>
+                                          {album.type && <span className="text-gray-400 dark:text-gray-500 flex-shrink-0">{album.type}</span>}
+                                          {album.year && <span className="text-gray-400 dark:text-gray-500 flex-shrink-0">{album.year}</span>}
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </>
+                                ) : (
+                                  <p className="text-xs text-gray-400 dark:text-gray-500">No albums found</p>
+                                )}
+                              </div>
+                            )}
                           </div>
-                        </div>
-                      ))
+                        )
+                      })
                     ) : (
                       <p className="text-center text-gray-500 dark:text-gray-400 py-8">
                         Search for an artist to add to your library

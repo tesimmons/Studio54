@@ -154,17 +154,16 @@ def search_musicbrainz_local(
 
         if search_type == "artist":
             results = local_db.search_artist(query, limit=limit)
-            # Enrich each artist result with image and first 4 albums
             from app.services.musicbrainz_images import MusicBrainzImageFetcher
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+
             image_fetcher = MusicBrainzImageFetcher()
+
+            # Albums come from local DB — fetch synchronously (fast)
             for artist in results:
-                artist_id = artist.get("id", "")
+                artist["image_url"] = None
                 try:
-                    artist["image_url"] = image_fetcher.fetch_artist_image_sync(artist_id)
-                except Exception:
-                    artist["image_url"] = None
-                try:
-                    all_albums = local_db.get_artist_albums(artist_id)
+                    all_albums = local_db.get_artist_albums(artist["id"])
                     artist["albums"] = [
                         {
                             "id": a.get("id"),
@@ -176,6 +175,27 @@ def search_musicbrainz_local(
                     ]
                 except Exception:
                     artist["albums"] = []
+
+            # Images come from Fanart.tv — fetch all in parallel, bail after 8s
+            artist_map = {a["id"]: a for a in results}
+
+            def _fetch_image(artist_id: str):
+                try:
+                    return artist_id, image_fetcher.fetch_artist_image_sync(artist_id)
+                except Exception:
+                    return artist_id, None
+
+            with ThreadPoolExecutor(max_workers=min(len(results), 8)) as pool:
+                futures = {pool.submit(_fetch_image, aid): aid for aid in artist_map}
+                try:
+                    for future in as_completed(futures, timeout=8):
+                        try:
+                            artist_id, image_url = future.result()
+                            artist_map[artist_id]["image_url"] = image_url
+                        except Exception:
+                            pass
+                except TimeoutError:
+                    pass  # Some images didn't resolve in time — leave them as None
         elif search_type == "album":
             results = local_db.search_release_group(query, artist_name=artist_filter, limit=limit)
         elif search_type == "track":

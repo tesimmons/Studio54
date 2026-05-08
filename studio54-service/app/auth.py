@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 # JWT settings
 JWT_SECRET = settings.studio54_encryption_key
 JWT_ALGORITHM = "HS256"
-JWT_EXPIRY_HOURS = 24
+JWT_EXPIRY_HOURS = 168  # 7 days
 
 # Bearer token extraction
 bearer_scheme = HTTPBearer(auto_error=False)

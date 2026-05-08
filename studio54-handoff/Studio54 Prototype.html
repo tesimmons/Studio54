@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Studio54 — Prototype</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; background: #0D1117; color: #E6EDF3; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { background: #30363D; border-radius: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  kbd { font-family: ui-monospace, "SF Mono", monospace; }
+  input:focus, button:focus, select:focus { outline: none; }
+  input:focus { border-color: #FF1493 !important; box-shadow: 0 0 0 3px rgba(255,20,147,0.15); }
+  #root { height: 100%; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script type="text/babel" src="shared.jsx"></script>
+<script type="text/babel" src="app-shell.jsx"></script>
+<script type="text/babel" src="pages-1.jsx"></script>
+<script type="text/babel" src="pages-2.jsx"></script>
+
+<script type="text/babel">
+  const PAGE_MAP = {
+    disco: PageDisco,
+    reading: PageReading,
+    booth: PageBooth,
+    listen: PageListen,
+    albums: PageAlbums,
+    playlists: PagePlaylists,
+    files: PageFiles,
+    dashboard: PageDashboard,
+    requests: PageRequests,
+    calendar: PageCalendar,
+    activity: PageActivity,
+    settings: PageSettings,
+    howto: PageHowTo,
+  };
+
+  const CmdK = ({ open, onClose, nav }) => {
+    const [q, setQ] = React.useState("");
+    const ref = React.useRef(null);
+    React.useEffect(() => { if (open) setTimeout(() => ref.current?.focus(), 50); }, [open]);
+    if (!open) return null;
+    const results = FLAT_ITEMS.filter(i => i.label.toLowerCase().includes(q.toLowerCase()));
+    return (
+      <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", backdropFilter: "blur(4px)", zIndex: 100, display: "flex", alignItems: "flex-start", justifyContent: "center", paddingTop: "10vh" }}>
+        <div onClick={(e) => e.stopPropagation()} style={{ width: "min(560px, 92vw)", background: T.bg2, border: `1px solid ${T.pinkBorder}`, borderRadius: 14, overflow: "hidden", boxShadow: `0 24px 60px rgba(0,0,0,0.6), 0 0 32px rgba(255,20,147,0.18)` }}>
+          <div style={{ padding: 16, borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{ fontSize: 18, color: T.pink }}>⌕</span>
+            <input ref={ref} value={q} onChange={(e) => setQ(e.target.value)} placeholder="Jump to anywhere…" style={{ flex: 1, background: "transparent", border: "none", color: T.text, fontSize: 16 }} />
+            <kbd style={{ fontSize: 11, background: T.bg, padding: "2px 6px", borderRadius: 4, border: `1px solid ${T.border}`, color: T.muted }}>esc</kbd>
+          </div>
+          <div style={{ maxHeight: 360, overflowY: "auto", padding: 8 }}>
+            {results.length === 0 && <div style={{ padding: 20, color: T.muted, fontSize: 13, textAlign: "center" }}>No matches</div>}
+            {results.map((it) => (
+              <button key={it.id} onClick={() => { nav(it.id); onClose(); }} style={{ width: "100%", display: "flex", alignItems: "center", gap: 12, padding: "8px 10px", borderRadius: 8, background: "transparent", border: "none", color: T.text, textAlign: "left", cursor: "pointer" }}
+                onMouseEnter={(e) => e.currentTarget.style.background = T.bg3}
+                onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}>
+                <div style={{ width: 32, height: 32, borderRadius: 6, background: "#000", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: `inset 0 0 0 1px ${T.pinkBorder}` }}>
+                  <img src={it.icon} style={{ width: 26, height: 26, objectFit: "contain" }} />
+                </div>
+                <span style={{ flex: 1, fontSize: 14, fontWeight: 500 }}>{it.label}</span>
+                <span style={{ fontSize: 10, color: T.mutedDim, letterSpacing: 1, textTransform: "uppercase" }}>{NAV_GROUPS.find(g => g.items.some(x => x.id === it.id))?.label}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  function App() {
+    const [route, nav] = useRoute();
+    const viewport = useViewport();
+    const [cmdOpen, setCmdOpen] = React.useState(false);
+
+    React.useEffect(() => {
+      const k = (e) => {
+        if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setCmdOpen(o => !o); }
+        if (e.key === "Escape") setCmdOpen(false);
+      };
+      window.addEventListener("keydown", k);
+      return () => window.removeEventListener("keydown", k);
+    }, []);
+
+    const PageComp = PAGE_MAP[route] || PageDisco;
+    const isDesktop = viewport === "desktop";
+
+    return (
+      <>
+        {isDesktop ? (
+          <div style={{ display: "flex", height: "100vh", background: T.bg, color: T.text }}>
+            <Sidebar active={route} nav={nav} onSearch={() => setCmdOpen(true)} />
+            <main style={{ flex: 1, overflowY: "auto" }}>
+              <div style={{ maxWidth: 1200, padding: "32px 40px 80px", margin: "0 auto" }}>
+                <PageComp />
+              </div>
+            </main>
+          </div>
+        ) : (
+          <MobileShell active={route} nav={nav} onSearch={() => setCmdOpen(true)}>
+            <PageComp />
+          </MobileShell>
+        )}
+        <CmdK open={cmdOpen} onClose={() => setCmdOpen(false)} nav={nav} />
+      </>
+    );
+  }
+
+  ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>

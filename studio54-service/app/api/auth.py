@@ -17,6 +17,7 @@ from app.auth import (
     hash_password, verify_password, create_access_token,
     get_current_user, require_director,
 )
+from jose import jwt, JWTError
 from sqlalchemy.dialects.postgresql import JSONB
 from app.security import rate_limit
 
@@ -88,6 +89,40 @@ async def login(request: Request, body: LoginRequest, db: Session = Depends(get_
 
 
 # --- Authenticated ---
+
+@router.post("/auth/refresh")
+@rate_limit("30/minute")
+async def refresh_token(request: Request, db: Session = Depends(get_db)):
+    """Issue a new JWT using the current (or recently-expired) token.
+    Accepts tokens expired within the last 7 days so the player can silently
+    recover without forcing a re-login."""
+    from app.auth import JWT_SECRET, JWT_ALGORITHM
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+    token = auth_header.split(" ", 1)[1]
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM],
+                             options={"verify_exp": False})
+        user_id: str = payload.get("sub")
+        exp: int = payload.get("exp", 0)
+        if not user_id:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+        # Reject tokens older than 7 days past expiry
+        from datetime import timezone
+        import time
+        if time.time() - exp > 7 * 24 * 3600:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token too old to refresh")
+    except JWTError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user or not user.is_active:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or disabled")
+
+    new_token = create_access_token(str(user.id), user.username, user.role)
+    return {"access_token": new_token, "token_type": "bearer"}
+
 
 @router.post("/auth/change-password")
 @rate_limit("10/minute")

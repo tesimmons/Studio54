@@ -132,18 +132,23 @@ def import_release(
         for track_data in media.get("tracks", []):
             recording = track_data.get("recording", {})
             recording_mbid = recording.get("id")
-            if not recording_mbid:
-                continue
+            track_number = track_data.get("position", 0)
             existing_track = db.query(Track).filter(
-                Track.musicbrainz_id == recording_mbid,
                 Track.album_id == album.id,
+                Track.disc_number == disc_number,
+                Track.track_number == track_number,
             ).first()
-            if not existing_track:
+            if existing_track:
+                existing_track.title = recording.get("title") or track_data.get("title", existing_track.title)
+                if recording_mbid:
+                    existing_track.musicbrainz_id = recording_mbid
+                existing_track.duration_ms = recording.get("length") or existing_track.duration_ms
+            else:
                 db.add(Track(
                     album_id=album.id,
                     title=recording.get("title") or track_data.get("title", "Unknown Track"),
                     musicbrainz_id=recording_mbid,
-                    track_number=track_data.get("position", 0),
+                    track_number=track_number,
                     disc_number=disc_number,
                     duration_ms=recording.get("length"),
                     has_file=False,

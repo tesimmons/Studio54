@@ -26,6 +26,10 @@ function PopOutPlayer() {
   const keepAliveRef = useRef<HTMLAudioElement>(null)
   const timeUpdateThrottleRef = useRef(0)
 
+  // Archive (Mark as Read / Mark Series as Complete) state — local to this player session
+  const [showArchiveConfirm, setShowArchiveConfirm] = useState(false)
+  const [sessionArchived, setSessionArchived] = useState(false)
+
   // Sleep timer state (all local, no persistence across player close)
   const [sleepTimerEndsAt, setSleepTimerEndsAt] = useState<number | null>(null)
   const [sleepTimerEndOfChapter, setSleepTimerEndOfChapter] = useState(false)
@@ -84,7 +88,16 @@ function PopOutPlayer() {
         break
       case 'PLAY_BOOK':
         if (msg.payload) {
-          dispatch({ type: 'PLAY_BOOK', tracks: msg.payload.tracks, startIndex: msg.payload.startIndex, bookId: msg.payload.bookId })
+          // Clear any pending localStorage key — prevents stale consumption on future fresh-tab opens
+          try { localStorage.removeItem(PLAY_BOOK_REQUEST_KEY) } catch {}
+          dispatch({
+            type: 'PLAY_BOOK',
+            tracks: msg.payload.tracks,
+            startIndex: msg.payload.startIndex ?? 0,
+            bookId: msg.payload.bookId,
+            sessionType: msg.payload.sessionType,
+            sessionEntityId: msg.payload.sessionEntityId,
+          })
         }
         break
       case 'ADD_TO_QUEUE':
@@ -170,22 +183,35 @@ function PopOutPlayer() {
     return () => window.removeEventListener('beforeunload', handler)
   }, [state, broadcastSend])
 
-  // On mount: check if a PLAY_BOOK request was queued before this window opened
+  // On mount: check if a PLAY_BOOK request was queued before this window opened.
+  // Poll for up to 2 s because iOS Safari can delay localStorage visibility across tabs.
   useEffect(() => {
-    const raw = localStorage.getItem(PLAY_BOOK_REQUEST_KEY)
-    if (!raw) return
-    localStorage.removeItem(PLAY_BOOK_REQUEST_KEY)
-    try {
-      const req = JSON.parse(raw)
-      dispatch({
-        type: 'PLAY_BOOK',
-        tracks: req.tracks,
-        startIndex: req.startIndex ?? 0,
-        bookId: req.bookId,
-        sessionType: req.sessionType,
-        sessionEntityId: req.sessionEntityId,
-      })
-    } catch {}
+    const tryDispatch = (): boolean => {
+      const raw = localStorage.getItem(PLAY_BOOK_REQUEST_KEY)
+      if (!raw) return false
+      localStorage.removeItem(PLAY_BOOK_REQUEST_KEY)
+      try {
+        const req = JSON.parse(raw)
+        dispatch({
+          type: 'PLAY_BOOK',
+          tracks: req.tracks,
+          startIndex: req.startIndex ?? 0,
+          bookId: req.bookId,
+          sessionType: req.sessionType,
+          sessionEntityId: req.sessionEntityId,
+        })
+      } catch {}
+      return true
+    }
+
+    if (tryDispatch()) return
+
+    // Key not yet visible — poll every 100 ms for up to 2 s
+    let attempts = 0
+    const interval = setInterval(() => {
+      if (tryDispatch() || ++attempts >= 20) clearInterval(interval)
+    }, 100)
+    return () => clearInterval(interval)
   }, [])
 
   // Audio source management
@@ -431,6 +457,22 @@ function PopOutPlayer() {
     }
   }, [])
 
+  const handleArchiveSession = useCallback(async () => {
+    if (!state.sessionEntityId || !state.sessionType) return
+    try {
+      if (state.sessionType === 'book') {
+        await listeningSessionApi.archiveBook(state.sessionEntityId)
+      } else {
+        await listeningSessionApi.archiveSeries(state.sessionEntityId)
+      }
+      setSessionArchived(true)
+      toast.success(state.sessionType === 'series' ? 'Series marked as complete' : 'Marked as read')
+    } catch {
+      toast.error('Failed — try again from the book page')
+    }
+    setShowArchiveConfirm(false)
+  }, [state.sessionEntityId, state.sessionType])
+
   // Close sleep menu on outside click
   useEffect(() => {
     if (!showSleepMenu) return
@@ -619,6 +661,31 @@ function PopOutPlayer() {
 
   // Shared UI pieces -------------------------------------------------------
 
+  const archiveConfirmDialogEl = showArchiveConfirm ? (
+    <div className="absolute inset-0 flex items-center justify-center bg-black/70 z-50">
+      <div className="bg-[#1a1a2e] border border-gray-700 rounded-xl p-5 text-center shadow-xl mx-4">
+        <p className="text-white font-medium mb-1">
+          {state.sessionType === 'series' ? 'Mark Series as Complete?' : 'Mark as Read?'}
+        </p>
+        <p className="text-xs text-[#8B949E] mb-4">Your progress will be kept for 7 days in case you need to recover it.</p>
+        <div className="flex gap-2 justify-center">
+          <button
+            onClick={handleArchiveSession}
+            className="px-4 py-2 rounded-lg bg-[#FF1493] hover:bg-[#FF1493]/80 text-white font-medium transition-colors"
+          >
+            Confirm
+          </button>
+          <button
+            onClick={() => setShowArchiveConfirm(false)}
+            className="px-4 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-white font-medium transition-colors"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  ) : null
+
   const albumArtEl = (size: 'sm' | 'lg') => (
     <div className={`rounded-xl overflow-hidden shadow-2xl bg-[#161B22] ${size === 'sm' ? 'w-16 h-16' : 'w-full aspect-square max-w-[280px]'}`}>
       <img
@@ -681,6 +748,16 @@ function PopOutPlayer() {
         <img src={S54.player.playlist} alt="Queue" className="w-4 h-4 object-contain" />
         {queue.length > 0 && <span className="absolute -top-1 -right-1 w-3.5 h-3.5 bg-[#FF1493] text-white text-[7px] font-bold rounded-full flex items-center justify-center">{queue.length}</span>}
       </button>
+      {/* Mark as Read / Mark Series as Complete — only shown for active book/series sessions */}
+      {isBookChapter && state.sessionType && state.sessionEntityId && !sessionArchived && (
+        <button
+          title={state.sessionType === 'series' ? 'Mark Series as Complete' : 'Mark as Read'}
+          onClick={() => setShowArchiveConfirm(true)}
+          className="p-1.5 rounded transition-colors text-[#8B949E] hover:text-green-400"
+        >
+          <FiCheck className="w-4 h-4" />
+        </button>
+      )}
       {/* Sleep timer button — only shown for book chapters */}
       {isBookChapter && (
         <div className="relative" data-sleep-menu>
@@ -817,14 +894,47 @@ function PopOutPlayer() {
   // MINI MODE (default — compact horizontal bar)
   // -------------------------------------------------------------------------
 
-  if (!isExpanded) {
-    return (
-      <div className="h-screen bg-[#0D1117] text-white flex flex-col select-none overflow-hidden">
-        <Toaster position="top-right" />
-        <audio ref={audioRef} preload="auto" onTimeUpdate={handleTimeUpdate} onLoadedMetadata={handleTimeUpdate} onEnded={handleEnded}
-          onError={(e) => { const audio = e.currentTarget; const err = audio.error; console.error('Audio error:', err?.code, err?.message, 'src:', audio.src) }} />
-        <audio ref={keepAliveRef} src="/silence.mp3" preload="auto" />
+  // -------------------------------------------------------------------------
+  // Single return — audio element lives here unconditionally so it is never
+  // unmounted when switching between mini and expanded modes.
+  // -------------------------------------------------------------------------
 
+  return (
+    <div className="h-screen bg-[#0D1117] text-white flex flex-col select-none overflow-hidden relative">
+      <Toaster position="top-right" />
+      {/* Overlays (snooze, archive confirm) — visible in both modes */}
+      {showSnoozePopup && (
+        <div className="absolute inset-0 flex items-center justify-center bg-black/70 z-50">
+          <div className="bg-[#1a1a2e] border border-gray-700 rounded-xl p-5 text-center shadow-xl">
+            <p className="text-white font-medium mb-3">Sleep timer ended</p>
+            <div className="flex gap-2 justify-center">
+              <button
+                onClick={snooze15}
+                className="px-4 py-2 rounded-lg bg-[#FF1493] hover:bg-[#FF1493]/80 text-white font-medium transition-colors"
+              >
+                + 15 minutes
+              </button>
+              <button
+                onClick={() => {
+                  if (snoozeAutoCloseRef.current) clearTimeout(snoozeAutoCloseRef.current)
+                  setShowSnoozePopup(false)
+                }}
+                className="px-4 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-white transition-colors"
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {archiveConfirmDialogEl}
+      {/* Audio elements — rendered once so switching modes never resets playback */}
+      <audio ref={audioRef} preload="auto" onTimeUpdate={handleTimeUpdate} onLoadedMetadata={handleTimeUpdate} onEnded={handleEnded}
+        onError={(e) => { const audio = e.currentTarget; const err = audio.error; console.error('Audio error:', err?.code, err?.message, 'src:', audio.src) }} />
+      <audio ref={keepAliveRef} src="/silence.mp3" preload="auto" />
+
+      {!isExpanded ? (
+        /* ── MINI MODE ── */
         <div className="flex-1 flex flex-col p-3 gap-2">
           {/* Row 1: Art + Track info */}
           <div className="flex items-center gap-3">
@@ -851,114 +961,76 @@ function PopOutPlayer() {
             </div>
           </div>
         </div>
-      </div>
-    )
-  }
+      ) : (
+        /* ── EXPANDED MODE — lyrics on right, playlist at bottom ── */
+        <div className="flex-1 grid overflow-hidden" style={{
+          gridTemplate: showQueue
+            ? '"left right" 1fr "bottom bottom" 140px / 45% 55%'
+            : '"left right" 1fr / 45% 55%',
+        }}>
+          {/* LEFT column — art, info, controls */}
+          <div className="flex flex-col p-4 overflow-y-auto" style={{ gridArea: 'left' }}>
+            <div className="flex justify-center mb-3">
+              {albumArtEl('lg')}
+            </div>
 
-  // -------------------------------------------------------------------------
-  // EXPANDED MODE (lyrics on right, playlist at bottom)
-  // -------------------------------------------------------------------------
+            {/* Track info */}
+            <div className="text-center mb-2">
+              <h2 className="text-base font-bold text-white truncate">
+                {currentTrack.title}
+                {isPreview && <span className="ml-1 text-[10px] font-semibold bg-amber-900/40 text-amber-300 px-1 rounded">30s</span>}
+              </h2>
+              <p className="text-sm text-[#8B949E] truncate">{currentTrack.artist_name}</p>
+              {currentTrack.album_title && <p className="text-xs text-[#484F58] truncate">{currentTrack.album_title}</p>}
+              {!isBookChapter && (
+                <div className="mt-1 flex justify-center">
+                  <StarRating rating={trackRating} onChange={(r) => ratingMutation.mutate(r)} size="sm" />
+                </div>
+              )}
+            </div>
 
-  return (
-    <div className="h-screen bg-[#0D1117] text-white flex flex-col select-none overflow-hidden relative">
-      <Toaster position="top-right" />
-      {/* Snooze popup */}
-      {showSnoozePopup && (
-        <div className="absolute inset-0 flex items-center justify-center bg-black/70 z-50">
-          <div className="bg-[#1a1a2e] border border-gray-700 rounded-xl p-5 text-center shadow-xl">
-            <p className="text-white font-medium mb-3">Sleep timer ended</p>
-            <div className="flex gap-2 justify-center">
-              <button
-                onClick={snooze15}
-                className="px-4 py-2 rounded-lg bg-[#FF1493] hover:bg-[#FF1493]/80 text-white font-medium transition-colors"
-              >
-                + 15 minutes
-              </button>
-              <button
-                onClick={() => {
-                  if (snoozeAutoCloseRef.current) clearTimeout(snoozeAutoCloseRef.current)
-                  setShowSnoozePopup(false)
-                }}
-                className="px-4 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-white transition-colors"
-              >
-                Dismiss
-              </button>
+            {/* Progress bar */}
+            {progressBarEl}
+
+            {/* Transport controls */}
+            <div className="mt-2">{transportEl(false)}</div>
+
+            {/* Volume + utility */}
+            <div className="flex items-center justify-center gap-2 mt-2">
+              <VolumeIcon className="w-4 h-4 text-[#8B949E]" />
+              {volumeSliderEl}
+            </div>
+            <div className="flex justify-center mt-2">
+              {utilityButtonsEl}
+              <AddToPlaylistDropdown trackId={currentTrack.id} />
             </div>
           </div>
-        </div>
-      )}
-      <audio ref={audioRef} preload="auto" onTimeUpdate={handleTimeUpdate} onLoadedMetadata={handleTimeUpdate} onEnded={handleEnded}
-        onError={(e) => { const audio = e.currentTarget; const err = audio.error; console.error('Audio error:', err?.code, err?.message, 'src:', audio.src) }} />
-      <audio ref={keepAliveRef} src="/silence.mp3" preload="auto" />
 
-      {/* Grid: left (art+controls) | right (lyrics) */}
-      <div className="flex-1 grid overflow-hidden" style={{
-        gridTemplate: showQueue
-          ? '"left right" 1fr "bottom bottom" 140px / 45% 55%'
-          : '"left right" 1fr / 45% 55%',
-      }}>
-        {/* LEFT column — art, info, controls */}
-        <div className="flex flex-col p-4 overflow-y-auto" style={{ gridArea: 'left' }}>
-          <div className="flex justify-center mb-3">
-            {albumArtEl('lg')}
-          </div>
-
-          {/* Track info */}
-          <div className="text-center mb-2">
-            <h2 className="text-base font-bold text-white truncate">
-              {currentTrack.title}
-              {isPreview && <span className="ml-1 text-[10px] font-semibold bg-amber-900/40 text-amber-300 px-1 rounded">30s</span>}
-            </h2>
-            <p className="text-sm text-[#8B949E] truncate">{currentTrack.artist_name}</p>
-            {currentTrack.album_title && <p className="text-xs text-[#484F58] truncate">{currentTrack.album_title}</p>}
-            {!isBookChapter && (
-              <div className="mt-1 flex justify-center">
-                <StarRating rating={trackRating} onChange={(r) => ratingMutation.mutate(r)} size="sm" />
+          {/* RIGHT column — lyrics */}
+          <div className="overflow-hidden border-l border-[#30363D]" style={{ gridArea: 'right' }}>
+            {showLyrics ? (
+              <LyricsPanel
+                syncedLyrics={lyricsData?.synced_lyrics ?? null}
+                plainLyrics={lyricsData?.plain_lyrics ?? null}
+                currentTime={currentTime}
+                onClose={() => setShowLyrics(false)}
+                isFloating
+              />
+            ) : (
+              <div className="flex items-center justify-center h-full text-[#484F58] text-sm">
+                {showQueue ? 'Toggle lyrics to view here' : ''}
               </div>
             )}
           </div>
 
-          {/* Progress bar */}
-          {progressBarEl}
-
-          {/* Transport controls */}
-          <div className="mt-2">{transportEl(false)}</div>
-
-          {/* Volume + utility */}
-          <div className="flex items-center justify-center gap-2 mt-2">
-            <VolumeIcon className="w-4 h-4 text-[#8B949E]" />
-            {volumeSliderEl}
-          </div>
-          <div className="flex justify-center mt-2">
-            {utilityButtonsEl}
-            <AddToPlaylistDropdown trackId={currentTrack.id} />
-          </div>
-        </div>
-
-        {/* RIGHT column — lyrics */}
-        <div className="overflow-hidden border-l border-[#30363D]" style={{ gridArea: 'right' }}>
-          {showLyrics ? (
-            <LyricsPanel
-              syncedLyrics={lyricsData?.synced_lyrics ?? null}
-              plainLyrics={lyricsData?.plain_lyrics ?? null}
-              currentTime={currentTime}
-              onClose={() => setShowLyrics(false)}
-              isFloating
-            />
-          ) : (
-            <div className="flex items-center justify-center h-full text-[#484F58] text-sm">
-              {showQueue ? 'Toggle lyrics to view here' : ''}
+          {/* BOTTOM row — playlist (only when showQueue) */}
+          {showQueue && (
+            <div className="border-t border-[#30363D] overflow-hidden" style={{ gridArea: 'bottom' }}>
+              {queuePanelEl('140px')}
             </div>
           )}
         </div>
-
-        {/* BOTTOM row — playlist (only when showQueue) */}
-        {showQueue && (
-          <div className="border-t border-[#30363D] overflow-hidden" style={{ gridArea: 'bottom' }}>
-            {queuePanelEl('140px')}
-          </div>
-        )}
-      </div>
+      )}
     </div>
   )
 }
