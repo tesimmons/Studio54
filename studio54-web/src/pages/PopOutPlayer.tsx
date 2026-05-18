@@ -13,7 +13,7 @@ import { S54 } from '../assets/graphics'
 
 function PopOutPlayer() {
   const { state, dispatch, audioRef, setRepeatMode, toggleShuffle, setVolume, toggleMute } = usePlayer()
-  const { currentTrack, queue, isPlaying, repeatMode, shuffleMode, volume, isMuted } = state
+  const { currentTrack, queue, playHistory, isPlaying, repeatMode, shuffleMode, volume, isMuted } = state
   const queryClient = useQueryClient()
 
   const [currentTime, setCurrentTime] = useState(0)
@@ -835,7 +835,7 @@ function PopOutPlayer() {
     <div className="w-full bg-[#161B22] flex flex-col h-full rounded-lg border border-[#30363D]" style={{ maxHeight: maxH || '120px' }}>
       <div className="border-b border-[#30363D] flex-shrink-0">
         <div className="flex items-center justify-between px-3 py-2">
-          <h3 className="text-xs font-semibold text-white">Queue ({queue.length})</h3>
+          <h3 className="text-xs font-semibold text-white">Queue ({playHistory.length + (currentTrack ? 1 : 0) + queue.length})</h3>
           {queue.length > 0 && (
             <div className="flex items-center space-x-2">
               <button onClick={() => { setSavingQueue(true); setTimeout(() => saveQueueInputRef.current?.focus(), 0) }} className="text-[10px] text-[#8B949E] hover:text-[#FF1493] flex items-center" title="Save queue as playlist">
@@ -858,18 +858,37 @@ function PopOutPlayer() {
         )}
       </div>
       <div className="flex-1 overflow-y-auto">
-        {queue.length === 0 ? (
+        {!currentTrack && queue.length === 0 && playHistory.length === 0 ? (
           <p className="p-3 text-xs text-[#8B949E] text-center">Queue is empty</p>
         ) : (
-          queue.map((track, index) => (
-            <div key={`${track.id}-${index}`} className="flex items-center justify-between px-3 py-1.5 hover:bg-[#1C2128]">
-              <div className="min-w-0 flex-1">
-                <div className="text-xs text-white truncate">{track.title}</div>
-                <div className="text-[10px] text-[#8B949E] truncate">{track.artist_name}</div>
+          <>
+            {playHistory.map((track, index) => (
+              <div key={`history-${track.id}-${index}`} className="flex items-center px-3 py-1.5 opacity-50">
+                <div className="min-w-0 flex-1">
+                  <div className="text-xs text-[#8B949E] truncate">{track.title}</div>
+                  <div className="text-[10px] text-[#484F58] truncate">{track.artist_name}</div>
+                </div>
               </div>
-              <button onClick={() => dispatch({ type: 'REMOVE_FROM_QUEUE', index })} className="text-gray-400 hover:text-[#E6EDF3] ml-2" title="Remove"><FiX className="w-3.5 h-3.5" /></button>
-            </div>
-          ))
+            ))}
+            {currentTrack && (
+              <div className="flex items-center px-3 py-1.5 bg-[#1C2128]">
+                <div className="w-1.5 h-1.5 rounded-full bg-[#FF1493] flex-shrink-0 mr-2" />
+                <div className="min-w-0 flex-1">
+                  <div className="text-xs text-white truncate">{currentTrack.title}</div>
+                  <div className="text-[10px] text-[#FF1493] truncate">Now Playing</div>
+                </div>
+              </div>
+            )}
+            {queue.map((track, index) => (
+              <div key={`${track.id}-${index}`} className="flex items-center justify-between px-3 py-1.5 hover:bg-[#1C2128]">
+                <div className="min-w-0 flex-1">
+                  <div className="text-xs text-white truncate">{track.title}</div>
+                  <div className="text-[10px] text-[#8B949E] truncate">{track.artist_name}</div>
+                </div>
+                <button onClick={() => dispatch({ type: 'REMOVE_FROM_QUEUE', index })} className="text-gray-400 hover:text-[#E6EDF3] ml-2" title="Remove"><FiX className="w-3.5 h-3.5" /></button>
+              </div>
+            ))}
+          </>
         )}
       </div>
     </div>

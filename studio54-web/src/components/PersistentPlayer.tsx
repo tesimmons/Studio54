@@ -470,7 +470,7 @@ function PersistentPlayer() {
       <div className="border-b border-gray-200 dark:border-[#30363D] flex-shrink-0">
         <div className="flex items-center justify-between p-3">
           <h3 className="text-sm font-semibold text-gray-900 dark:text-white">
-            Queue ({queue.length})
+            Queue ({playHistory.length + (currentTrack ? 1 : 0) + queue.length})
           </h3>
           {queue.length > 0 && (
             <div className="flex items-center space-x-2">
@@ -526,12 +526,14 @@ function PersistentPlayer() {
         )}
       </div>
       <div className="flex-1 overflow-y-auto">
-        {playHistory.length > 0 && (
+        {!currentTrack && queue.length === 0 && playHistory.length === 0 ? (
+          <p className="p-4 text-sm text-gray-500 dark:text-[#8B949E] text-center">Queue is empty</p>
+        ) : (
           <>
             {playHistory.map((track, index) => (
               <div
                 key={`history-${track.id}-${index}`}
-                className="flex items-center justify-between px-3 py-2 opacity-40"
+                className="flex items-center px-3 py-2 opacity-50"
               >
                 <div className="min-w-0 flex-1">
                   <div className="text-sm text-gray-500 dark:text-[#8B949E] truncate">{track.title}</div>
@@ -539,35 +541,37 @@ function PersistentPlayer() {
                 </div>
               </div>
             ))}
-            {queue.length > 0 && (
-              <div className="border-t border-gray-200 dark:border-[#30363D]" />
+            {currentTrack && (
+              <div className="flex items-center px-3 py-2 bg-gray-50 dark:bg-[#1C2128]">
+                <div className="w-1.5 h-1.5 rounded-full bg-[#FF1493] flex-shrink-0 mr-2" />
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm text-gray-900 dark:text-white truncate">{currentTrack.title}</div>
+                  <div className="text-xs text-[#FF1493] truncate">Now Playing</div>
+                </div>
+              </div>
             )}
+            {queue.map((track, index) => (
+              <div
+                key={`${track.id}-${index}`}
+                className="flex items-center justify-between px-3 py-2 hover:bg-gray-50 dark:hover:bg-[#1C2128]"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm text-gray-900 dark:text-white truncate">{track.title}</div>
+                  <div className="text-xs text-gray-500 dark:text-[#8B949E] truncate">{track.artist_name}</div>
+                </div>
+                <div className="flex items-center ml-2 flex-shrink-0 space-x-1">
+                  <AddToPlaylistDropdown trackId={track.id} />
+                  <button
+                    onClick={() => removeFromQueue(index)}
+                    className="text-gray-400 hover:text-gray-600 dark:hover:text-[#E6EDF3]"
+                    title="Remove from queue"
+                  >
+                    <FiX className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            ))}
           </>
-        )}
-        {queue.length === 0 && playHistory.length === 0 ? (
-          <p className="p-4 text-sm text-gray-500 dark:text-[#8B949E] text-center">Queue is empty</p>
-        ) : (
-          queue.map((track, index) => (
-            <div
-              key={`${track.id}-${index}`}
-              className="flex items-center justify-between px-3 py-2 hover:bg-gray-50 dark:hover:bg-[#1C2128]"
-            >
-              <div className="min-w-0 flex-1">
-                <div className="text-sm text-gray-900 dark:text-white truncate">{track.title}</div>
-                <div className="text-xs text-gray-500 dark:text-[#8B949E] truncate">{track.artist_name}</div>
-              </div>
-              <div className="flex items-center ml-2 flex-shrink-0 space-x-1">
-                <AddToPlaylistDropdown trackId={track.id} />
-                <button
-                  onClick={() => removeFromQueue(index)}
-                  className="text-gray-400 hover:text-gray-600 dark:hover:text-[#E6EDF3]"
-                  title="Remove from queue"
-                >
-                  <FiX className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-          ))
         )}
       </div>
     </div>
