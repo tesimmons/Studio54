@@ -595,6 +595,7 @@ from app.api import book_progress as book_progress_api
 from app.api import book_playlists as book_playlists_api
 from app.api import api_keys as api_keys_api
 from app.api import albums_retry as albums_retry_api
+from app.api import listening_sessions as listening_sessions_api
 
 # Auth endpoints (login, user management)
 app.include_router(auth_api.router, prefix="/api/v1", tags=["auth"])
@@ -667,3 +668,4 @@ app.include_router(listen_api.router, prefix="/api/v1", tags=["listen"])
 
 # Album Retry Control & Download History
 app.include_router(albums_retry_api.router, prefix="/api/v1", tags=["albums-retry"])
+app.include_router(listening_sessions_api.router, prefix="/api/v1", tags=["listening-sessions"])

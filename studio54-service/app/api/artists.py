@@ -90,7 +90,7 @@ async def search_musicbrainz_artists(
         mb_client = get_musicbrainz_client()
         results = mb_client.search_artist(query, limit)
 
-        # Format results for frontend
+        # Format base results
         artists = []
         for result in results:
             artist_data = {
@@ -99,9 +99,55 @@ async def search_musicbrainz_artists(
                 "disambiguation": result.get("disambiguation"),
                 "country": result.get("country"),
                 "type": result.get("type"),
-                "score": result.get("score")
+                "score": result.get("score"),
+                "image_url": None,
+                "albums": [],
             }
             artists.append(artist_data)
+
+        # Enrich with albums (local DB — fast) and images (parallel, best-effort)
+        from app.services.musicbrainz_images import MusicBrainzImageFetcher
+        from app.services.musicbrainz_local import get_musicbrainz_local_db
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        local_db = get_musicbrainz_local_db()
+        image_fetcher = MusicBrainzImageFetcher()
+
+        if local_db:
+            for artist in artists:
+                try:
+                    raw = local_db.get_artist_albums(artist["id"])
+                    artist["albums"] = [
+                        {
+                            "id": a.get("id"),
+                            "title": a.get("title"),
+                            "type": a.get("primary-type"),
+                            "year": a.get("first-release-date", "")[:4] if a.get("first-release-date") else None,
+                        }
+                        for a in raw[:4]
+                    ]
+                except Exception:
+                    pass
+
+        artist_map = {a["id"]: a for a in artists}
+
+        def _fetch_image(artist_id: str):
+            try:
+                return artist_id, image_fetcher.fetch_artist_image_sync(artist_id)
+            except Exception:
+                return artist_id, None
+
+        with ThreadPoolExecutor(max_workers=min(len(artists), 8)) as pool:
+            futures = {pool.submit(_fetch_image, aid): aid for aid in artist_map}
+            try:
+                for future in as_completed(futures, timeout=8):
+                    try:
+                        artist_id, image_url = future.result()
+                        artist_map[artist_id]["image_url"] = image_url
+                    except Exception:
+                        pass
+            except TimeoutError:
+                pass
 
         return {
             "artists": artists,

@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Studio54 — Navigation & Graphics Suggestions</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    html, body { margin: 0; padding: 0; background: #0a0d12; height: 100%; font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; color: #E6EDF3; }
+  </style>
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel" src="design-canvas.jsx"></script>
+  <script type="text/babel" src="shared.jsx"></script>
+  <script type="text/babel" src="notes.jsx"></script>
+  <script type="text/babel" src="artboard-current.jsx"></script>
+  <script type="text/babel" src="artboard-grouped.jsx"></script>
+  <script type="text/babel" src="artboard-rail.jsx"></script>
+  <script type="text/babel" src="artboard-topdock.jsx"></script>
+  <script type="text/babel" src="artboard-interactive.jsx"></script>
+  <script type="text/babel" src="artboard-mobile.jsx"></script>
+
+  <script type="text/babel">
+    const App = () => (
+      <DesignCanvas title="Studio54 — Navigation & Graphics" subtitle="Audit + 3 directions + working prototype">
+        <DCSection id="audit" title="01 — Audit">
+          <DCArtboard id="notes" label="Notes" width={520} height={1280}>
+            <Notes />
+          </DCArtboard>
+          <DCArtboard id="current" label="Current state (recreated)" width={1280} height={820}>
+            <Current />
+          </DCArtboard>
+        </DCSection>
+
+        <DCSection id="directions" title="02 — Three directions">
+          <DCArtboard id="grouped" label="A · Grouped sidebar with neon plaques" width={1280} height={820}>
+            <NavGrouped />
+          </DCArtboard>
+          <DCArtboard id="rail" label="B · Compact rail + flyouts + now-playing" width={1280} height={820}>
+            <NavRail />
+          </DCArtboard>
+          <DCArtboard id="topdock" label="C · Top bar + neon dock + ⌘K palette" width={1280} height={820}>
+            <NavTopDock />
+          </DCArtboard>
+        </DCSection>
+
+        <DCSection id="proto" title="03 — Interactive prototype (focus this one)">
+          <DCArtboard id="interactive" label="Click sidebar items · press ⌘K to search" width={1280} height={820}>
+            <NavInteractive />
+          </DCArtboard>
+        </DCSection>
+
+        <DCSection id="mobile" title="04 — Option A on mobile">
+          <DCArtboard id="mobile-spec" label="Spec — what changes on mobile" width={480} height={760}>
+            <MobileSpec />
+          </DCArtboard>
+          <DCArtboard id="mobile-closed" label="Default view — bottom tabs" width={440} height={920}>
+            <MobileClosed />
+          </DCArtboard>
+          <DCArtboard id="mobile-drawer" label="More tab — full grouped drawer" width={440} height={920}>
+            <MobileDrawer />
+          </DCArtboard>
+        </DCSection>
+      </DesignCanvas>
+    );
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>

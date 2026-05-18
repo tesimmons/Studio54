@@ -1,7 +1,8 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { authFetch, bookPlaylistsApi, seriesApi, booksApi } from '../api/client'
+import { authFetch, bookPlaylistsApi, seriesApi, booksApi, listeningSessionApi } from '../api/client'
+import type { ListeningSession } from '../api/client'
 import { useAuth } from '../contexts/AuthContext'
 import {
   FiArrowLeft,
@@ -258,6 +259,10 @@ function SeriesDetail() {
   // Add book dialog
   const [addBookDialogOpen, setAddBookDialogOpen] = useState(false)
 
+  const [listeningSession, setListeningSession] = useState<ListeningSession | null>(null)
+  const [markingFinished, setMarkingFinished] = useState(false)
+  const [showMarkFinishedDialog, setShowMarkFinishedDialog] = useState(false)
+
   // ---------------------------------------------------------------------------
   // Queries
   // ---------------------------------------------------------------------------
@@ -281,6 +286,13 @@ function SeriesDetail() {
     enabled: !!id,
     retry: false,
   })
+
+  useEffect(() => {
+    if (!id) return
+    listeningSessionApi.getSeries(id)
+      .then(session => setListeningSession(session))
+      .catch(() => setListeningSession(null))
+  }, [id])
 
   // ---------------------------------------------------------------------------
   // Mutations
@@ -479,6 +491,28 @@ function SeriesDetail() {
         </div>
       )}
 
+      {/* Archived session undo banner */}
+      {listeningSession?.archived_at && listeningSession.pending_delete_at && (
+        <div className="px-4 py-3 bg-gray-800/80 border border-gray-700 rounded-lg flex items-center justify-between">
+          <span className="text-gray-300 text-sm">
+            You marked this as complete on{' '}
+            {new Date(listeningSession.archived_at).toLocaleDateString()}.{' '}
+            Undo until {new Date(listeningSession.pending_delete_at).toLocaleDateString()}.
+          </span>
+          <button
+            onClick={async () => {
+              try {
+                const updated = await listeningSessionApi.unarchiveSeries(id!)
+                setListeningSession(updated)
+              } catch {}
+            }}
+            className="ml-4 px-3 py-1 rounded bg-[#FF1493] hover:bg-[#FF1493]/80 text-white text-sm transition-colors"
+          >
+            Undo
+          </button>
+        </div>
+      )}
+
       {/* ------------------------------------------------------------------ */}
       {/* Header                                                              */}
       {/* ------------------------------------------------------------------ */}
@@ -650,13 +684,25 @@ function SeriesDetail() {
               {playlist && playlist.chapter_count > 0 && (
                 <button
                   className="px-4 py-2 rounded-lg font-medium transition-colors bg-[#FF1493] text-white hover:bg-[#FF1493]/80"
-                  onClick={() => {
+                  onClick={async () => {
                     const firstChapter = playlist.chapters?.[0]
-                    if (firstChapter?.file_path) {
-                      window.dispatchEvent(new CustomEvent('play-book-playlist', {
-                        detail: { seriesId: id, playlistId: playlist.id }
-                      }))
+                    if (!firstChapter?.file_path) return
+
+                    let session = listeningSession
+                    if (!session) {
+                      try {
+                        session = await listeningSessionApi.createSeries(id!)
+                        setListeningSession(session)
+                      } catch {}
                     }
+
+                    window.dispatchEvent(new CustomEvent('play-book-playlist', {
+                      detail: {
+                        seriesId: id,
+                        playlistId: playlist.id,
+                        sessionStartIndex: session?.current_index ?? 0,
+                      }
+                    }))
                   }}
                   title="Play entire series from chapter 1"
                 >
@@ -664,6 +710,15 @@ function SeriesDetail() {
                     <FiPlay className="w-4 h-4 mr-2" />
                     Play Series
                   </div>
+                </button>
+              )}
+
+              {listeningSession && !listeningSession.archived_at && (
+                <button
+                  onClick={() => setShowMarkFinishedDialog(true)}
+                  className="px-4 py-2 rounded-lg font-medium transition-colors bg-gray-700 hover:bg-gray-600 text-white text-sm"
+                >
+                  Mark Series as Complete
                 </button>
               )}
             </div>
@@ -795,6 +850,43 @@ function SeriesDetail() {
                 disabled={removeBookMutation.isPending}
               >
                 {removeBookMutation.isPending ? 'Removing...' : 'Remove'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Mark Series as Complete confirmation dialog */}
+      {showMarkFinishedDialog && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+          <div className="bg-[#1a1a2e] border border-gray-700 rounded-xl p-6 max-w-md mx-4 shadow-xl">
+            <h3 className="text-white font-semibold text-lg mb-2">Mark series as complete?</h3>
+            <p className="text-gray-400 mb-4">
+              Mark <span className="text-white">{series.name}</span> as complete? Your progress will be
+              kept for 7 days in case you need to recover it.
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => setShowMarkFinishedDialog(false)}
+                className="px-4 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-white transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                disabled={markingFinished}
+                onClick={async () => {
+                  setMarkingFinished(true)
+                  try {
+                    const updated = await listeningSessionApi.archiveSeries(id!)
+                    setListeningSession(updated)
+                    setShowMarkFinishedDialog(false)
+                  } catch {} finally {
+                    setMarkingFinished(false)
+                  }
+                }}
+                className="px-4 py-2 rounded-lg bg-[#FF1493] hover:bg-[#FF1493]/80 text-white font-medium transition-colors"
+              >
+                {markingFinished ? 'Saving…' : 'Mark as Complete'}
               </button>
             </div>
           </div>

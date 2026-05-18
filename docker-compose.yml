@@ -1,15 +1,46 @@
 ###############################################################################
 # Studio54 — Standalone Docker Compose
 # Music & Audiobook Management System
+#
+# MusicBrainz mirror is included and runs on studio54_network so the service
+# and worker containers can reach musicbrainz-db directly.
+#
+# MasterControl deployment: apply docker-compose.mastercontrol.yml to also
+# bridge studio54-service, studio54-worker, and musicbrainz-db onto ai_network.
 ###############################################################################
 
 networks:
   studio54_network:
     name: studio54_network
     driver: bridge
+  # Declared here so the mastercontrol override can reference it without needing
+  # to redeclare it. Not connected to any service in this base file.
+  ai_network:
+    name: ai_network
+    external: true
 
 volumes:
   studio54-job-logs:
+    driver: local
+  # MusicBrainz volumes — bind-mounted to /docker/musicbrainz/ so data survives
+  # container recreation. Do not change device paths without migrating data first.
+  musicbrainz-pgdata:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /docker/musicbrainz/pgdata
+  musicbrainz-dbdump:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /docker/musicbrainz/dbdump
+  musicbrainz-mqdata:
+    driver: local
+  musicbrainz-solrdata:
+    driver: local
+  musicbrainz-solrdump:
     driver: local
 
 services:
@@ -295,3 +326,184 @@ services:
       - TZ=${TZ:-America/New_York}
     networks:
       - studio54_network
+
+  # ---------------------------------------------------------------------------
+  # MusicBrainz Mirror
+  # Full local MusicBrainz database for rate-limit-free metadata lookups.
+  # All services live on studio54_network so studio54-service and
+  # studio54-worker can reach musicbrainz-db directly using the URL:
+  #   postgresql://musicbrainz:musicbrainz@musicbrainz-db:5432/musicbrainz_db
+  #
+  # Data is persisted in /docker/musicbrainz/ (bind-mounted volumes).
+  # To update replication data, exec into musicbrainz-server and run the
+  # MusicBrainz replication scripts, or use the admin/replication cron.
+  # ---------------------------------------------------------------------------
+
+  musicbrainz-db:
+    build:
+      context: ./musicbrainz-docker/build/postgres-prebuilt
+    image: studio54/musicbrainz-db:${POSTGRES_VERSION:-16}
+    container_name: musicbrainz-db
+    restart: unless-stopped
+    command: postgres -c "shared_buffers=2048MB" -c "shared_preload_libraries=pg_amqp.so"
+    environment:
+      - POSTGRES_USER=${MUSICBRAINZ_DB_USER:-musicbrainz}
+      - POSTGRES_PASSWORD=${MUSICBRAINZ_DB_PASSWORD:-musicbrainz}
+    shm_size: "2GB"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "10"
+    volumes:
+      - musicbrainz-pgdata:/var/lib/postgresql/data
+    expose:
+      - "5432"
+    networks:
+      - studio54_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${MUSICBRAINZ_DB_USER:-musicbrainz} -d musicbrainz_db"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    labels:
+      com.centurylinklabs.watchtower.enable: "false"
+      studio54.role: musicbrainz-db
+
+  musicbrainz-mq:
+    build: ./musicbrainz-docker/build/rabbitmq
+    container_name: musicbrainz-mq
+    hostname: "mq"
+    restart: unless-stopped
+    ulimits:
+      nofile: 65536
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "10"
+    volumes:
+      - musicbrainz-mqdata:/var/lib/rabbitmq
+    expose:
+      - "5672"
+    networks:
+      - studio54_network
+    labels:
+      com.centurylinklabs.watchtower.enable: "false"
+      studio54.role: musicbrainz-mq
+
+  musicbrainz-search:
+    build:
+      context: ./musicbrainz-docker/build/solr
+      args:
+        - MB_SOLR_VERSION=${MB_SOLR_VERSION:-4.1.0}
+    image: studio54/musicbrainz-search:${MB_SOLR_VERSION:-4.1.0}
+    container_name: musicbrainz-search
+    restart: unless-stopped
+    environment:
+      - SOLR_HEAP=2g
+      - LOG4J_FORMAT_MSG_NO_LOOKUPS=true
+    mem_swappiness: 1
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "10"
+    expose:
+      - "8983"
+    volumes:
+      - musicbrainz-dbdump:/media/dbdump:ro
+      - musicbrainz-solrdata:/var/solr
+      - musicbrainz-solrdump:/var/cache/musicbrainz/solr-backups
+    networks:
+      - studio54_network
+    labels:
+      com.centurylinklabs.watchtower.enable: "false"
+      studio54.role: musicbrainz-search
+
+  musicbrainz-redis:
+    image: redis:3-alpine
+    container_name: studio54-musicbrainz-redis
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "10"
+    expose:
+      - "6379"
+    networks:
+      - studio54_network
+    labels:
+      com.centurylinklabs.watchtower.enable: "false"
+      studio54.role: musicbrainz-redis
+
+  musicbrainz-server:
+    build:
+      context: ./musicbrainz-docker/build/musicbrainz-prebuilt
+    image: studio54/musicbrainz-server:latest
+    container_name: musicbrainz-server
+    restart: unless-stopped
+    ports:
+      - "${MUSICBRAINZ_WEB_PORT:-5000}:5000"
+    environment:
+      - POSTGRES_USER=${MUSICBRAINZ_DB_USER:-musicbrainz}
+      - POSTGRES_PASSWORD=${MUSICBRAINZ_DB_PASSWORD:-musicbrainz}
+      - MUSICBRAINZ_BASE_FTP_URL=${MUSICBRAINZ_BASE_FTP_URL:-}
+      - MUSICBRAINZ_BASE_DOWNLOAD_URL=${MUSICBRAINZ_BASE_DOWNLOAD_URL:-https://data.metabrainz.org/pub/musicbrainz}
+      - MUSICBRAINZ_SERVER_PROCESSES=${MUSICBRAINZ_SERVER_PROCESSES:-10}
+      - MUSICBRAINZ_USE_PROXY=1
+      - MUSICBRAINZ_WEB_SERVER_HOST=${MUSICBRAINZ_WEB_SERVER_HOST:-localhost}
+      - MUSICBRAINZ_WEB_SERVER_PORT=${MUSICBRAINZ_WEB_PORT:-5000}
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "50"
+    volumes:
+      - musicbrainz-dbdump:/media/dbdump
+      - musicbrainz-solrdump:/var/cache/musicbrainz/solr-backups:ro
+      - ${MUSICBRAINZ_REPLICATION_CRON:-./musicbrainz-docker/default/replication.cron}:/crons.conf
+      - ${MUSICBRAINZ_ACCESS_TOKEN_PATH:-./musicbrainz-docker/local/secrets/metabrainz_access_token}:/run/secrets/metabrainz_access_token
+    depends_on:
+      musicbrainz-db:
+        condition: service_healthy
+      musicbrainz-mq:
+        condition: service_started
+      musicbrainz-search:
+        condition: service_started
+      musicbrainz-redis:
+        condition: service_started
+    networks:
+      - studio54_network
+    labels:
+      com.centurylinklabs.watchtower.enable: "false"
+      studio54.role: musicbrainz-server
+
+  musicbrainz-indexer:
+    build: ./musicbrainz-docker/build/sir
+    container_name: musicbrainz-indexer
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=${MUSICBRAINZ_DB_USER:-musicbrainz}
+      - POSTGRES_PASSWORD=${MUSICBRAINZ_DB_PASSWORD:-musicbrainz}
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "10"
+    volumes:
+      - ${MUSICBRAINZ_INDEXER_CONFIG:-./musicbrainz-docker/default/indexer.ini}:/code/config.ini
+    depends_on:
+      musicbrainz-db:
+        condition: service_healthy
+      musicbrainz-mq:
+        condition: service_started
+      musicbrainz-search:
+        condition: service_started
+    networks:
+      - studio54_network
+    labels:
+      com.centurylinklabs.watchtower.enable: "false"
+      studio54.role: musicbrainz-indexer

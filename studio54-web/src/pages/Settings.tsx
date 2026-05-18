@@ -4,7 +4,7 @@ import toast, { Toaster } from 'react-hot-toast'
 import api, { notificationsApi, adminApi, settingsApi, authApi } from '../api/client'
 import ApiKeysSettings from '../components/ApiKeysSettings'
 import type { MusicBrainzSettings } from '../api/client'
-import { FiPlus, FiTrash2, FiCheck, FiX, FiAlertCircle, FiEdit, FiEye, FiEyeOff, FiBell, FiSend, FiUsers, FiShield, FiSettings, FiFileText, FiChevronLeft, FiFilter, FiDownload } from 'react-icons/fi'
+import { FiPlus, FiTrash2, FiCheck, FiX, FiAlertCircle, FiEdit, FiEye, FiEyeOff, FiBell, FiSend, FiUsers, FiShield, FiSettings, FiFileText, FiChevronLeft, FiChevronDown, FiChevronUp, FiFilter, FiDownload, FiMusic } from 'react-icons/fi'
 import type { NotificationProfile, AuthUser, UserRole } from '../types'
 import { NOTIFICATION_EVENTS } from '../types'
 import MediaManagement from '../components/MediaManagement'
@@ -520,6 +520,7 @@ function Settings() {
   const [mbArtistFilter, setMbArtistFilter] = useState('')
   const [mbSearchResults, setMbSearchResults] = useState<any[] | null>(null)
   const [mbSearching, setMbSearching] = useState(false)
+  const [expandedMbRow, setExpandedMbRow] = useState<string | null>(null)
 
   const updateMbSettingsMutation = useMutation({
     mutationFn: (settings: { local_db_enabled?: boolean; api_rate_limit?: number }) =>
@@ -1010,78 +1011,124 @@ function Settings() {
 
                     {/* Results Table */}
                     {mbSearchResults !== null && (
-                      <div className="overflow-x-auto">
+                      <div>
                         {mbSearchResults.length === 0 ? (
                           <p className="text-sm text-gray-500 dark:text-gray-400 py-4 text-center">No results found.</p>
-                        ) : (
-                          <table className="w-full text-sm">
-                            <thead>
-                              <tr className="border-b border-gray-200 dark:border-[#30363D]">
-                                {mbSearchType === 'artist' && (
-                                  <>
-                                    <th className="text-left py-2 px-2 text-gray-500 dark:text-gray-400 font-medium">Name</th>
-                                    <th className="text-left py-2 px-2 text-gray-500 dark:text-gray-400 font-medium">Type</th>
-                                    <th className="text-right py-2 px-2 text-gray-500 dark:text-gray-400 font-medium">Score</th>
-                                    <th className="text-left py-2 px-2 text-gray-500 dark:text-gray-400 font-medium">MBID</th>
-                                  </>
-                                )}
-                                {mbSearchType === 'album' && (
-                                  <>
-                                    <th className="text-left py-2 px-2 text-gray-500 dark:text-gray-400 font-medium">Title</th>
-                                    <th className="text-left py-2 px-2 text-gray-500 dark:text-gray-400 font-medium">Artist</th>
-                                    <th className="text-left py-2 px-2 text-gray-500 dark:text-gray-400 font-medium">Type</th>
-                                    <th className="text-center py-2 px-2 text-gray-500 dark:text-gray-400 font-medium">Year</th>
-                                    <th className="text-right py-2 px-2 text-gray-500 dark:text-gray-400 font-medium">Score</th>
-                                    <th className="text-left py-2 px-2 text-gray-500 dark:text-gray-400 font-medium">MBID</th>
-                                  </>
-                                )}
-                                {mbSearchType === 'track' && (
-                                  <>
-                                    <th className="text-left py-2 px-2 text-gray-500 dark:text-gray-400 font-medium">Title</th>
-                                    <th className="text-left py-2 px-2 text-gray-500 dark:text-gray-400 font-medium">Artist</th>
-                                    <th className="text-right py-2 px-2 text-gray-500 dark:text-gray-400 font-medium">Duration</th>
-                                    <th className="text-right py-2 px-2 text-gray-500 dark:text-gray-400 font-medium">Score</th>
-                                    <th className="text-left py-2 px-2 text-gray-500 dark:text-gray-400 font-medium">MBID</th>
-                                  </>
-                                )}
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {mbSearchResults.map((r: any, i: number) => (
-                                <tr key={r.id + '-' + i} className="border-b border-gray-100 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-[#1C2128]">
-                                  {mbSearchType === 'artist' && (
-                                    <>
-                                      <td className="py-2 px-2 text-gray-900 dark:text-white font-medium">{r.name}</td>
-                                      <td className="py-2 px-2 text-gray-500 dark:text-gray-400">{r.type || '-'}</td>
-                                      <td className="py-2 px-2 text-right text-gray-500 dark:text-gray-400">{r.score}%</td>
-                                      <td className="py-2 px-2 text-gray-400 dark:text-gray-500 font-mono text-xs truncate max-w-[200px]" title={r.id}>{r.id}</td>
-                                    </>
+                        ) : mbSearchType === 'artist' ? (
+                          <div className="space-y-2">
+                            {mbSearchResults.map((r: any, i: number) => {
+                              const isExpanded = expandedMbRow === r.id
+                              return (
+                                <div key={r.id + '-' + i} className="border border-gray-200 dark:border-[#30363D] rounded-lg overflow-hidden">
+                                  <button
+                                    className="w-full flex items-center gap-3 px-3 py-3 hover:bg-gray-50 dark:hover:bg-[#1C2128] transition-colors text-left"
+                                    onClick={() => setExpandedMbRow(isExpanded ? null : r.id)}
+                                  >
+                                    {/* Artist image or placeholder */}
+                                    <div className="flex-shrink-0 w-12 h-12 rounded-md overflow-hidden bg-gray-100 dark:bg-[#21262D] flex items-center justify-center">
+                                      {r.image_url ? (
+                                        <img src={r.image_url} alt={r.name} className="w-full h-full object-cover" />
+                                      ) : (
+                                        <FiMusic className="text-gray-400 dark:text-gray-500" size={20} />
+                                      )}
+                                    </div>
+                                    {/* Artist info */}
+                                    <div className="flex-1 min-w-0">
+                                      <p className="text-sm font-medium text-gray-900 dark:text-white truncate">{r.name}</p>
+                                      {r.disambiguation && (
+                                        <p className="text-xs text-gray-500 dark:text-gray-400 truncate">({r.disambiguation})</p>
+                                      )}
+                                      <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                                        {r.type && <span className="text-xs text-gray-500 dark:text-gray-400">{r.type}</span>}
+                                        <span className="text-xs font-medium text-[#FF1493]">{r.score}%</span>
+                                        <span className="text-xs text-gray-400 dark:text-gray-500 font-mono truncate max-w-[180px]" title={r.id}>{r.id}</span>
+                                      </div>
+                                    </div>
+                                    {/* Expand chevron */}
+                                    <div className="flex-shrink-0 text-gray-400 dark:text-gray-500">
+                                      {isExpanded ? <FiChevronUp size={16} /> : <FiChevronDown size={16} />}
+                                    </div>
+                                  </button>
+                                  {/* Expandable albums section */}
+                                  {isExpanded && (
+                                    <div className="border-t border-gray-200 dark:border-[#30363D] bg-gray-50 dark:bg-[#0D1117] px-3 py-2">
+                                      {r.albums && r.albums.length > 0 ? (
+                                        <>
+                                          <p className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-2">Top Albums</p>
+                                          <div className="space-y-1">
+                                            {r.albums.map((album: any) => (
+                                              <div key={album.id} className="flex items-center gap-2 text-xs">
+                                                <span className="text-gray-900 dark:text-white font-medium flex-1 truncate">{album.title}</span>
+                                                {album.type && <span className="text-gray-400 dark:text-gray-500 flex-shrink-0">{album.type}</span>}
+                                                {album.year && <span className="text-gray-400 dark:text-gray-500 flex-shrink-0">{album.year}</span>}
+                                              </div>
+                                            ))}
+                                          </div>
+                                        </>
+                                      ) : (
+                                        <p className="text-xs text-gray-400 dark:text-gray-500">No albums found</p>
+                                      )}
+                                    </div>
                                   )}
+                                </div>
+                              )
+                            })}
+                          </div>
+                        ) : (
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-sm">
+                              <thead>
+                                <tr className="border-b border-gray-200 dark:border-[#30363D]">
                                   {mbSearchType === 'album' && (
                                     <>
-                                      <td className="py-2 px-2 text-gray-900 dark:text-white font-medium">{r.title}</td>
-                                      <td className="py-2 px-2 text-gray-500 dark:text-gray-400">{r.artist_name || '-'}</td>
-                                      <td className="py-2 px-2 text-gray-500 dark:text-gray-400">{r.primary_type || '-'}</td>
-                                      <td className="py-2 px-2 text-center text-gray-500 dark:text-gray-400">{r.first_release_year || '-'}</td>
-                                      <td className="py-2 px-2 text-right text-gray-500 dark:text-gray-400">{r.score}%</td>
-                                      <td className="py-2 px-2 text-gray-400 dark:text-gray-500 font-mono text-xs truncate max-w-[200px]" title={r.id}>{r.id}</td>
+                                      <th className="text-left py-2 px-2 text-gray-500 dark:text-gray-400 font-medium">Title</th>
+                                      <th className="text-left py-2 px-2 text-gray-500 dark:text-gray-400 font-medium">Artist</th>
+                                      <th className="text-left py-2 px-2 text-gray-500 dark:text-gray-400 font-medium">Type</th>
+                                      <th className="text-center py-2 px-2 text-gray-500 dark:text-gray-400 font-medium">Year</th>
+                                      <th className="text-right py-2 px-2 text-gray-500 dark:text-gray-400 font-medium">Score</th>
+                                      <th className="text-left py-2 px-2 text-gray-500 dark:text-gray-400 font-medium">MBID</th>
                                     </>
                                   )}
                                   {mbSearchType === 'track' && (
                                     <>
-                                      <td className="py-2 px-2 text-gray-900 dark:text-white font-medium">{r.title}</td>
-                                      <td className="py-2 px-2 text-gray-500 dark:text-gray-400">{r.artist_name || '-'}</td>
-                                      <td className="py-2 px-2 text-right text-gray-500 dark:text-gray-400">
-                                        {r.length ? `${Math.floor(r.length / 60000)}:${String(Math.floor((r.length % 60000) / 1000)).padStart(2, '0')}` : '-'}
-                                      </td>
-                                      <td className="py-2 px-2 text-right text-gray-500 dark:text-gray-400">{r.score}%</td>
-                                      <td className="py-2 px-2 text-gray-400 dark:text-gray-500 font-mono text-xs truncate max-w-[200px]" title={r.id}>{r.id}</td>
+                                      <th className="text-left py-2 px-2 text-gray-500 dark:text-gray-400 font-medium">Title</th>
+                                      <th className="text-left py-2 px-2 text-gray-500 dark:text-gray-400 font-medium">Artist</th>
+                                      <th className="text-right py-2 px-2 text-gray-500 dark:text-gray-400 font-medium">Duration</th>
+                                      <th className="text-right py-2 px-2 text-gray-500 dark:text-gray-400 font-medium">Score</th>
+                                      <th className="text-left py-2 px-2 text-gray-500 dark:text-gray-400 font-medium">MBID</th>
                                     </>
                                   )}
                                 </tr>
-                              ))}
-                            </tbody>
-                          </table>
+                              </thead>
+                              <tbody>
+                                {mbSearchResults.map((r: any, i: number) => (
+                                  <tr key={r.id + '-' + i} className="border-b border-gray-100 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-[#1C2128]">
+                                    {mbSearchType === 'album' && (
+                                      <>
+                                        <td className="py-2 px-2 text-gray-900 dark:text-white font-medium">{r.title}</td>
+                                        <td className="py-2 px-2 text-gray-500 dark:text-gray-400">{r.artist_name || '-'}</td>
+                                        <td className="py-2 px-2 text-gray-500 dark:text-gray-400">{r.primary_type || '-'}</td>
+                                        <td className="py-2 px-2 text-center text-gray-500 dark:text-gray-400">{r.first_release_year || '-'}</td>
+                                        <td className="py-2 px-2 text-right text-gray-500 dark:text-gray-400">{r.score}%</td>
+                                        <td className="py-2 px-2 text-gray-400 dark:text-gray-500 font-mono text-xs truncate max-w-[200px]" title={r.id}>{r.id}</td>
+                                      </>
+                                    )}
+                                    {mbSearchType === 'track' && (
+                                      <>
+                                        <td className="py-2 px-2 text-gray-900 dark:text-white font-medium">{r.title}</td>
+                                        <td className="py-2 px-2 text-gray-500 dark:text-gray-400">{r.artist_name || '-'}</td>
+                                        <td className="py-2 px-2 text-right text-gray-500 dark:text-gray-400">
+                                          {r.length ? `${Math.floor(r.length / 60000)}:${String(Math.floor((r.length % 60000) / 1000)).padStart(2, '0')}` : '-'}
+                                        </td>
+                                        <td className="py-2 px-2 text-right text-gray-500 dark:text-gray-400">{r.score}%</td>
+                                        <td className="py-2 px-2 text-gray-400 dark:text-gray-500 font-mono text-xs truncate max-w-[200px]" title={r.id}>{r.id}</td>
+                                      </>
+                                    )}
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
                         )}
                       </div>
                     )}

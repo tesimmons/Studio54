@@ -36,6 +36,9 @@ interface PlayerState {
   isMuted: boolean
   bookId: string | null
   chapterId: string | null
+  sessionType: 'book' | 'series' | null
+  sessionEntityId: string | null
+  sessionCurrentIndex: number
 }
 
 type PlayerAction =
@@ -48,7 +51,7 @@ type PlayerAction =
   | { type: 'REMOVE_FROM_QUEUE'; index: number }
   | { type: 'CLEAR_QUEUE' }
   | { type: 'PLAY_ALBUM'; tracks: PlayerTrack[]; startIndex: number }
-  | { type: 'PLAY_BOOK'; tracks: PlayerTrack[]; startIndex: number; bookId: string }
+  | { type: 'PLAY_BOOK'; tracks: PlayerTrack[]; startIndex: number; bookId: string; sessionType?: 'book' | 'series'; sessionEntityId?: string }
   | { type: 'SET_REPEAT'; mode: RepeatMode }
   | { type: 'SET_VOLUME'; volume: number }
   | { type: 'TOGGLE_MUTE' }
@@ -145,6 +148,7 @@ function playerReducer(state: PlayerState, action: PlayerAction): PlayerState {
           ? [...state.playHistory, state.currentTrack]
           : state.playHistory,
         chapterId: state.bookId ? nextTrack.id : state.chapterId,
+        sessionCurrentIndex: state.bookId ? state.sessionCurrentIndex + 1 : state.sessionCurrentIndex,
       }
     }
     case 'PREVIOUS': {
@@ -203,6 +207,9 @@ function playerReducer(state: PlayerState, action: PlayerAction): PlayerState {
           : state.history,
         bookId: action.bookId,
         chapterId: tracksWithFile[startIdx].id,
+        sessionType: action.sessionType ?? null,
+        sessionEntityId: action.sessionEntityId ?? null,
+        sessionCurrentIndex: startIdx,
       }
     }
     case 'SET_REPEAT':
@@ -226,7 +233,7 @@ function playerReducer(state: PlayerState, action: PlayerAction): PlayerState {
       return { ...state, isMuted }
     }
     case 'CLOSE_PLAYER':
-      return { ...state, currentTrack: null, isPlaying: false, queue: [], playHistory: [], history: [], shuffleMode: false, bookId: null, chapterId: null }
+      return { ...state, currentTrack: null, isPlaying: false, queue: [], playHistory: [], history: [], shuffleMode: false, bookId: null, chapterId: null, sessionType: null, sessionEntityId: null, sessionCurrentIndex: 0 }
     case 'RESTORE_STATE':
       return {
         ...state,
@@ -241,6 +248,9 @@ function playerReducer(state: PlayerState, action: PlayerAction): PlayerState {
         isMuted: action.state.isMuted,
         bookId: action.state.bookId,
         chapterId: action.state.chapterId,
+        sessionType: action.state.sessionType ?? null,
+        sessionEntityId: action.state.sessionEntityId ?? null,
+        sessionCurrentIndex: action.state.sessionCurrentIndex ?? 0,
       }
     default:
       return state
@@ -272,6 +282,9 @@ function loadInitialState(): PlayerState {
     shuffleMode: false,
     bookId: null,
     chapterId: null,
+    sessionType: null,
+    sessionEntityId: null,
+    sessionCurrentIndex: 0,
     ...loadVolumeState(),
   }
 
@@ -346,7 +359,7 @@ interface PlayerContextValue {
   removeFromQueue: (index: number) => void
   clearQueue: () => void
   playAlbum: (tracks: PlayerTrack[], startIndex?: number) => void
-  playBook: (tracks: PlayerTrack[], startIndex: number, bookId: string) => void
+  playBook: (tracks: PlayerTrack[], startIndex: number, bookId: string, sessionType?: 'book' | 'series', sessionEntityId?: string) => void
   seekTo: (positionMs: number) => void
   audioRef: React.RefObject<HTMLAudioElement>
   isPopOutOpen: boolean
@@ -473,7 +486,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     const win = window.open(
       '/player',
       'studio54-player',
-      'width=420,height=250,resizable=yes'
+      'width=440,height=400,resizable=yes'
     )
     if (win) {
       popOutWindowRef.current = win
@@ -529,11 +542,18 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     }
   }, [isPopOutOpen, send])
 
-  const playBook = useCallback((tracks: PlayerTrack[], startIndex: number, bookId: string) => {
+  const playBook = useCallback((
+    tracks: PlayerTrack[],
+    startIndex: number,
+    bookId: string,
+    sessionType?: 'book' | 'series',
+    sessionEntityId?: string,
+  ) => {
+    const payload = { tracks, startIndex, bookId, sessionType, sessionEntityId }
     if (isPopOutOpen) {
-      send({ type: 'PLAY_BOOK', payload: { tracks, startIndex, bookId } })
+      send({ type: 'PLAY_BOOK', payload })
     } else {
-      dispatch({ type: 'PLAY_BOOK', tracks, startIndex, bookId })
+      dispatch({ type: 'PLAY_BOOK', ...payload })
     }
   }, [isPopOutOpen, send])
 
@@ -845,8 +865,9 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 
         // Determine the bookId from the first chapter
         const firstBookId = playlist.chapters.find((ch: BookPlaylistChapter) => ch.book_id)?.book_id
+        const startIndex = detail.sessionStartIndex ?? 0
         if (firstBookId) {
-          dispatch({ type: 'PLAY_BOOK', tracks, startIndex: 0, bookId: firstBookId })
+          playBook(tracks, startIndex, firstBookId, 'series', detail.seriesId)
         } else {
           dispatch({ type: 'PLAY_ALBUM', tracks, startIndex: 0 })
         }
@@ -857,7 +878,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 
     window.addEventListener('play-book-playlist', handlePlayBookPlaylist)
     return () => window.removeEventListener('play-book-playlist', handlePlayBookPlaylist)
-  }, [])
+  }, [playBook])
 
   // Now Playing heartbeat: send every 30s while playing, clear on pause/stop
   // Skip when pop-out is active (it sends its own heartbeats)

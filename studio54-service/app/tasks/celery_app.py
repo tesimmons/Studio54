@@ -170,6 +170,12 @@ celery_app.conf.update(
             "schedule": 86400.0,
             "options": {"expires": 82800},
         },
+        # Delete expired listening sessions nightly at 2am
+        "cleanup-expired-sessions": {
+            "task": "app.tasks.monitoring_tasks.cleanup_expired_listening_sessions",
+            "schedule": crontab(hour=2, minute=0),
+            "options": {"expires": 3600, "queue": "monitoring"},
+        },
         # Clean up old download records daily
         "cleanup-old-downloads": {
             "task": "app.tasks.monitoring_tasks.cleanup_old_downloads",

@@ -51,6 +51,7 @@ function Library() {
   const [mbSearchQuery, setMbSearchQuery] = useState('')
   const [mbResults, setMbResults] = useState<any[]>([])
   const [mbSearching, setMbSearching] = useState(false)
+  const [expandedMbArtist, setExpandedMbArtist] = useState<string | null>(null)
   const [cleanupOrphanedDialogOpen, setCleanupOrphanedDialogOpen] = useState(false)
   const [orphanedCount, setOrphanedCount] = useState<number | null>(null)
   const [orphanedLoading, setOrphanedLoading] = useState(false)
@@ -2062,27 +2063,79 @@ function Library() {
 
                 {mbResults.length > 0 && (
                   <div className="space-y-2 max-h-96 overflow-y-auto">
-                    {mbResults.map((result: any) => (
-                      <div
-                        key={result.id}
-                        className="p-4 border border-gray-200 dark:border-[#30363D] rounded-lg hover:bg-gray-50 dark:hover:bg-[#1C2128] flex items-center justify-between"
-                      >
-                        <div>
-                          <h3 className="font-medium text-gray-900 dark:text-white">{result.name}</h3>
-                          {result.disambiguation && (
-                            <p className="text-sm text-gray-500 dark:text-gray-400">{result.disambiguation}</p>
+                    {mbResults.map((result: any) => {
+                      const isExpanded = expandedMbArtist === result.id
+                      return (
+                        <div key={result.id} className="border border-gray-200 dark:border-[#30363D] rounded-lg overflow-hidden">
+                          {/* Main row */}
+                          <div className="flex items-center gap-3 px-3 py-3 hover:bg-gray-50 dark:hover:bg-[#1C2128] transition-colors">
+                            {/* Thumbnail */}
+                            <div
+                              className="flex-shrink-0 w-12 h-12 rounded-md overflow-hidden bg-gray-100 dark:bg-[#21262D] flex items-center justify-center cursor-pointer"
+                              onClick={() => setExpandedMbArtist(isExpanded ? null : result.id)}
+                            >
+                              {result.image_url ? (
+                                <img src={result.image_url} alt={result.name} className="w-full h-full object-cover" />
+                              ) : (
+                                <FiMusic className="text-gray-400 dark:text-gray-500" size={20} />
+                              )}
+                            </div>
+                            {/* Info */}
+                            <div
+                              className="flex-1 min-w-0 cursor-pointer"
+                              onClick={() => setExpandedMbArtist(isExpanded ? null : result.id)}
+                            >
+                              <p className="font-medium text-gray-900 dark:text-white truncate">{result.name}</p>
+                              {result.disambiguation && (
+                                <p className="text-xs text-gray-500 dark:text-gray-400 truncate">({result.disambiguation})</p>
+                              )}
+                              <div className="flex items-center gap-2 mt-0.5 flex-wrap text-xs text-gray-500 dark:text-gray-400">
+                                {result.type && <span>{result.type}</span>}
+                                {result.country && <span>{result.country}</span>}
+                                {result.score && <span className="text-[#FF1493] font-medium">{result.score}%</span>}
+                              </div>
+                            </div>
+                            {/* Expand toggle */}
+                            <button
+                              className="flex-shrink-0 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 p-1"
+                              onClick={() => setExpandedMbArtist(isExpanded ? null : result.id)}
+                              title={isExpanded ? 'Collapse' : 'Show albums'}
+                            >
+                              {isExpanded ? <FiChevronUp size={16} /> : <FiChevronDown size={16} />}
+                            </button>
+                            {/* Add button */}
+                            <button
+                              onClick={() => addArtistMutation.mutate(result.id)}
+                              disabled={addArtistMutation.isPending}
+                              className="btn btn-sm btn-primary flex-shrink-0"
+                            >
+                              Add
+                            </button>
+                          </div>
+                          {/* Expandable albums */}
+                          {isExpanded && (
+                            <div className="border-t border-gray-200 dark:border-[#30363D] bg-gray-50 dark:bg-[#0D1117] px-3 py-2">
+                              {result.albums && result.albums.length > 0 ? (
+                                <>
+                                  <p className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-2">Top Albums</p>
+                                  <div className="space-y-1">
+                                    {result.albums.map((album: any) => (
+                                      <div key={album.id} className="flex items-center gap-2 text-xs">
+                                        <span className="text-gray-900 dark:text-white font-medium flex-1 truncate">{album.title}</span>
+                                        {album.type && <span className="text-gray-400 dark:text-gray-500 flex-shrink-0">{album.type}</span>}
+                                        {album.year && <span className="text-gray-400 dark:text-gray-500 flex-shrink-0">{album.year}</span>}
+                                      </div>
+                                    ))}
+                                  </div>
+                                </>
+                              ) : (
+                                <p className="text-xs text-gray-400 dark:text-gray-500">No albums found</p>
+                              )}
+                            </div>
                           )}
-                          <p className="text-xs text-gray-400">{result.country} • {result.type}</p>
                         </div>
-                        <button
-                          onClick={() => addArtistMutation.mutate(result.id)}
-                          disabled={addArtistMutation.isPending}
-                          className="btn btn-sm btn-primary"
-                        >
-                          Add
-                        </button>
-                      </div>
-                    ))}
+                      )
+                    })}
                   </div>
                 )}
               </div>
